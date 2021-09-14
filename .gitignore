@@ -1,0 +1,6 @@
+/build
+*.txt
+/result_graphs
+*.png
+.vscode
+__pycache__
