@@ -23,7 +23,7 @@ int main(int argc, char **argv) {
     for (int i=0; i<N_measures; i++) hres[i] = 0;
     hipMemcpy(dres, hres, arrsize, hipMemcpyHostToDevice);
 
-    hipLaunchKernelGGL(measure_l1i_linesize, dim3(1), dim3(1), 0, 0, dres);
+    hipLaunchKernelP(measure_l1i_linesize, dim3(1), dim3(1), 0, 0, dres);
     hipStreamSynchronize(0);
     hipMemcpy(hres, dres, arrsize, hipMemcpyDeviceToHost);
 

@@ -158,7 +158,7 @@ bool check_launchable_thr(uint32_t G, uint32_t B) {{
     int hout = 0, *dout;
     hipMalloc(&dout, sizeof(int));
     hipMemcpy(dout, &hout, sizeof(int), hipMemcpyHostToDevice);
-    hipLaunchKernelGGL(test_thr, dim3(G), dim3(B), 0, 0, dout, G, B);
+    hipLaunchKernelP(test_thr, dim3(G), dim3(B), 0, 0, dout, G, B);
     hipStreamSynchronize(0);
     hipMemcpy(&hout, dout, sizeof(int), hipMemcpyDeviceToHost);
     hipFree(dout);
@@ -190,7 +190,7 @@ bool check_launchable_shm(uint32_t s) {{
     hipMalloc(&dout, sizeof(uint8_t));
     hipMemcpy(dout, &hout, sizeof(uint8_t), hipMemcpyHostToDevice);
     int index_of_function = ({} - s + {}) / {};
-    hipLaunchKernelGGL(test_shm[index_of_function], dim3(1), dim3(1), 0, 0, dout, true);
+    hipLaunchKernelP(test_shm[index_of_function], dim3(1), dim3(1), 0, 0, dout, true);
     hipStreamSynchronize(0);
     hipMemcpy(&hout, dout, sizeof(uint8_t), hipMemcpyDeviceToHost);
     hipFree(dout);

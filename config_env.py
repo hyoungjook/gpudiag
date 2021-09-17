@@ -56,7 +56,7 @@ if config_preset == "gpgpusim":
         "cd $DIR && ./$BIN"
 elif config_preset == "gem5":
     run_command = "build/GCN3_X86/gem5.opt configs/multigpu/multigpu_se.py " +\
-        "-c $DIR/$BIN -n4 --dgpu --gfx-version=gfx803"
+        "-c $DIR/$BIN -n4 --dgpu --gfx-version=gfx803 --reg-alloc-policy=dynamic"
 else:
     run_command = "$DIR/$BIN"
 

@@ -194,6 +194,8 @@ def create_graph_directory(proj_path):
 
 def draw_graph(line, test, proj_path):
     # format: @title:dataN:xlabel:x0:dx:ylabel:y0,y1,...,yn\n
+    # optional line drawings: ..., yn:a,b,label:a,b,label:...\n where y=ax+b
+    plt.clf()
     if line[0] != '@':
         exit(1)
     line = line[1:]
@@ -202,23 +204,35 @@ def draw_graph(line, test, proj_path):
     title = tokens[0]
     dataN = int(tokens[1])
     xlabel = tokens[2]
-    x0 = int(tokens[3])
-    dx = int(tokens[4])
+    x0 = float(tokens[3])
+    dx = float(tokens[4])
     ylabel = tokens[5]
     ystrs = tokens[6].split(',')
     xdata = []
     ydata = []
     for i in range(dataN):
         xdata += [x0 + i * dx]
-        ydata += [int(ystrs[i])]
+        ydata += [float(ystrs[i])]
     figure_name = title.replace(' ', '_').replace('(', '_').replace(')', '_')
     figure_path = os.path.join(proj_path, "result_graphs/",\
         test.name + "_" + figure_name + ".png")
+    addl_xdata = [0] + xdata
+    for i in range(len(tokens)-7):
+        slope = float(tokens[7+i].split(',')[0])
+        y_intercept = float(tokens[7+i].split(',')[1])
+        linelabel = tokens[7+i].split(',')[2]
+        addl_ydata = []
+        for i in range(len(addl_xdata)):
+            addl_ydata += [y_intercept + slope * addl_xdata[i]]
+        plt.plot(addl_xdata, addl_ydata, 'k--', label=linelabel)
     plt.plot(xdata, ydata, 'ko')
+    if len(tokens) > 7:
+        plt.legend()
     plt.title(title)
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
     plt.savefig(figure_path)
+    plt.clf()
 
 def update(test, proj_path, time_consumed):
     testname = test.name

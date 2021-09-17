@@ -8,8 +8,9 @@
 
 #define ckpt_nslot_timeout_multiplier
 #define ckpt_shared_memory_test_granularity
-#define ckpt_mab_start_with_num_mp
-#define ckpt_mab_start_with_barrier_buffer_size
+#define ckpt_mab_skip_num_mp_and_use
+#define ckpt_mab_skip_bbsize_and_use
+#define ckpt_mab_skip_shmem
 
 #include "tool.h"
 #include "mp_and_buffers.h"
@@ -27,31 +28,26 @@ uint64_t test_nslot_sharedmem(uint32_t G, int s_idx, uint64_t timeout);
 int measure_nslot_sharedmem(int s_idx, uint32_t num_mp);
 
 int main(int argc, char **argv) {
-    // check ckpt validity
-    if (ckpt_mab_start_with_barrier_buffer_size > 0 &&
-        ckpt_mab_start_with_num_mp <= 0) {
-            printf("Invalid checkpoint values!\n"
-                "If mab_start_with_barrier_buffer_size > 0, "
-                "mab_start_with_num_mp should be > 0 too.\n"
-                "Check out config_ckpt.py\n");
-            exit(1);
-    }
-
     CHECK(hipSetDevice(0));
     write_init("mp_and_buffers");
-    uint32_t num_mp, barrier_buffer_size;
+    uint32_t num_mp = 0, barrier_buffer_size = 0;
 
-    if (ckpt_mab_start_with_num_mp <= 0) {
+    if (ckpt_mab_skip_num_mp_and_use <= 0) {
+        printf("Running num_mp test..\n");
         num_mp = num_mp_test();
     }
-    else num_mp = ckpt_mab_start_with_num_mp;
+    else num_mp = ckpt_mab_skip_num_mp_and_use;
 
-    if (ckpt_mab_start_with_barrier_buffer_size <= 0) {
+    if (ckpt_mab_skip_bbsize_and_use <= 0) {
+        printf("Running warpstatebuffer test..\n");
         barrier_buffer_size = warpstatebuffer_test(num_mp);
     }
-    else barrier_buffer_size = ckpt_mab_start_with_barrier_buffer_size;
+    else barrier_buffer_size = ckpt_mab_skip_bbsize_and_use;
 
-    sharedmemory_test(num_mp, barrier_buffer_size);
+    if (ckpt_mab_skip_shmem <= 0) {
+        printf("Running sharedmemory test..\n");
+        sharedmemory_test(num_mp, barrier_buffer_size);
+    }
     
     return 0;
 }
@@ -66,8 +62,8 @@ uint32_t num_mp_test() {
     for (int b=1; b<=iter_num; b++) {
         htime = 0;
         hipMemcpy(dtime, &htime, sizeof(uint64_t), hipMemcpyHostToDevice);
-        hipLaunchKernelGGL(
-            measure_time_br, dim3(1), dim3(b * warp_size), 0, 0, dtime);
+        hipLaunchKernelP(
+            measure_width_br, dim3(1), dim3(b * warp_size), 0, 0, dtime);
         hipStreamSynchronize(0);
         hipMemcpy(&htime, dtime, sizeof(uint64_t), hipMemcpyDeviceToHost);
         br_times_raw[b-1] = htime;
@@ -119,7 +115,7 @@ uint32_t num_mp_test() {
         htotclk = (uint64_t*)malloc(testG * sizeof(uint64_t));
         hipMalloc(&dtotclk, testG * sizeof(uint64_t));
 
-        hipLaunchKernelGGL(measure_num_mp, dim3(testG), dim3(c_br * warp_size),
+        hipLaunchKernelP(measure_num_mp, dim3(testG), dim3(c_br * warp_size),
             0, 0, dsync, testG, dmptime, mp_timeout, d_isto, dtotclk);
         hipStreamSynchronize(0);
 
@@ -170,36 +166,38 @@ uint32_t warpstatebuffer_test(uint32_t num_mp) {
     for (int b=1; b<=iter_num; b++) {
         Nbuf[b-1] = measure_nslot_warpstatebuffer(b, num_mp);
     }
-    uint32_t barrier_buffer_size = (uint32_t)Nbuf[0];
-    uint32_t wsb_size_min = barrier_buffer_size, wsb_size_max = 0xFFFFFFFF;
+    uint32_t barrier_buffer_size;
+    uint32_t wsb_size_min = 0, wsb_size_max = 0xFFFFFFFF;
     int non_N1_data_cnt = 0;
     bool N2_conflict_occurred = false;
-    for (int b=1; b<=iter_num; b++) {
+    for (int b=iter_num; b>=1; b--) {
         int n_at_b = Nbuf[b-1];
-        if (n_at_b >= barrier_buffer_size) continue; // truncated data
         non_N1_data_cnt++;
         // possible values for N2
         uint32_t min, max;
         min = n_at_b * b; max = (n_at_b + 1) * b - 1;
         // intersection
-        wsb_size_min = wsb_size_min>min?wsb_size_min:min;
-        wsb_size_max = wsb_size_max<max?wsb_size_max:max;
-        if (wsb_size_min > wsb_size_max) {
+        uint32_t tmp_wsb_size_min = wsb_size_min>min?wsb_size_min:min;
+        uint32_t tmp_wsb_size_max = wsb_size_max<max?wsb_size_max:max;
+        if (tmp_wsb_size_min > tmp_wsb_size_max) {
             N2_conflict_occurred = true;
+            barrier_buffer_size = (uint32_t)n_at_b;
             break;
         }
+        wsb_size_min = tmp_wsb_size_min;
+        wsb_size_max = tmp_wsb_size_max;
     }
+    if (!N2_conflict_occurred) barrier_buffer_size = (uint32_t)Nbuf[0];
     write_line("# 4. Warp state buffer Nslot raw data");
     write_graph_data("Warp state buffer size", iter_num,
         "BlockDim", 1, 1, "Nslot", Nbuf);
     char buf[100];
     write_line("# 5. Warp state buffer analysis");
-    bufptr = sprintf(buf, "# Found %d non-N1 data", non_N1_data_cnt);
+    int bufptr = sprintf(buf, "# Found %d non-N1 data", non_N1_data_cnt);
     if (non_N1_data_cnt == 0) bufptr += sprintf(buf+bufptr, ": unable to analyze N2");
-    if (N2_conflict_occurred) bufptr += sprintf(buf+bufptr, ", but conflict occurred");
     write_line(buf);
     write_value("barrier_buffer_size", barrier_buffer_size);
-    if (non_N1_data_cnt > 0 && !N2_conflict_occurred) {
+    if (non_N1_data_cnt > 0) {
         write_line("# [min possible value, max possible value]");
         int wsb_size[2]; wsb_size[0] = wsb_size_min; wsb_size[1] = wsb_size_max;
         write_values("warp_state_buffer_size", wsb_size, 2);
@@ -217,7 +215,7 @@ uint64_t test_nslot_warpstatebuffer(uint32_t G, int b, uint64_t timeout) {
     hclks = (uint64_t*)malloc(G * sizeof(uint64_t));
     hipMalloc(&dclks, G * sizeof(uint64_t));
 
-    hipLaunchKernelGGL(measure_warpstatebuffer,
+    hipLaunchKernelP(measure_warpstatebuffer,
         dim3(G), dim3(b * warp_size), 0, 0,
         dsync, G, timeout, d_isto, dclks);
     hipStreamSynchronize(0);
@@ -272,7 +270,6 @@ void sharedmemory_test(uint32_t num_mp, uint32_t barrier_buffer_size) {
         shm_size_max = shm_size_max<max?shm_size_max:max;
         if (shm_size_min > shm_size_max) {
             S_conflict_occurred = true;
-            break;
         }
     }
     write_line("# 6. Shared memory Nslot raw data");
@@ -281,7 +278,7 @@ void sharedmemory_test(uint32_t num_mp, uint32_t barrier_buffer_size) {
         "Nslot", Nbuf);
     write_line("# 7. Shared memory analysis");
     char buf[100];
-    bufptr = sprintf(buf, "# Found %d non-N1 data", non_N1_data_cnt);
+    int bufptr = sprintf(buf, "# Found %d non-N1 data", non_N1_data_cnt);
     if (non_N1_data_cnt == 0) bufptr += sprintf(buf+bufptr, ": unable to analyze N2");
     if (S_conflict_occurred) bufptr += sprintf(buf+bufptr, ", but conflict occurred");
     write_line(buf);
@@ -303,7 +300,7 @@ uint64_t test_nslot_sharedmem(uint32_t G, int s_idx, uint64_t timeout) {
     hclks = (uint64_t*)malloc(G * sizeof(uint64_t));
     hipMalloc(&dclks, G * sizeof(uint64_t));
 
-    hipLaunchKernelGGL(measure_shmem[s_idx], dim3(G), dim3(1), 0, 0,
+    hipLaunchKernelP(measure_shmem[s_idx], dim3(G), dim3(1), 0, 0,
         dsync, G, timeout, d_isto, dclks);
     hipStreamSynchronize(0);
     hipMemcpy(&h_isto, d_isto, sizeof(uint32_t), hipMemcpyDeviceToHost);
