@@ -15,7 +15,7 @@
 }
 
 #define hipLaunchKernelP(name, g, b, shm, str, ...) \
-{printf("  Launched " #name ": (G,B)=(%d,%d)\n", (int)g.x, (int)b.x);\
+{printf("  Launched " #name ": (G,B)=(%d,%d)\n",(int)g.x,(int)b.x); fflush(stdout);\
 hipLaunchKernelGGL(name, g, b, shm, str, __VA_ARGS__);}
 
 #define OUT_NAME "report.txt"

@@ -7,7 +7,7 @@ class Test(Enum):
     l1i_linesize = auto()
     icache_hierarchy = auto()
     mp_and_buffers = auto()
-    exec_units = auto()
+    functional_units = auto()
 
 class Feature(Enum):
     warp_size = auto()

@@ -53,7 +53,7 @@ int main(int argc, char **argv) {
     write_value("limit_registers_per_block", limit_registers_per_block);
 #else
     write_values("limit_registers_per_thread", limit_registers_per_thread, 2);
-    uint32_t LRpB[2] = {1, 1}; // temporary
+    uint32_t LRpB[2] = {limit_registers_per_block, limit_registers_per_block};
     write_values("limit_registers_per_block", LRpB, 2);
 #endif
     

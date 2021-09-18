@@ -60,5 +60,4 @@ __global__ void measure_l1i_linesize(uint64_t *result){
     for(int i=0;i<{};i++) asm volatile("v_mov_b32 v0, %0\\n"::"v"(vdummy[i]));
 }}
 """.format(2*num_repeat+2,2*num_repeat+2,2*num_repeat+2, 4,4,4)
-    code += "}\n"
     return code

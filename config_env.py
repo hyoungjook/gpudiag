@@ -1,5 +1,5 @@
-config_preset = "gpgpusim"
-##config_preset = "gem5"
+##config_preset = "gpgpusim"
+config_preset = "gem5"
 ##config_preset = "custom"
 
 #============================================================================
@@ -51,9 +51,9 @@ else:
 
 if config_preset == "gpgpusim":
     run_command = "export CUDA_INSTALL_PATH=/usr/local/cuda && " +\
-        ". ./setup_environment debug && " +\
+        ". ./setup_environment debug > /dev/null && " +\
         "cp configs/tested-cfgs/SM75_RTX2060_notperfect/gpgpusim.config $DIR && " +\
-        "cd $DIR && ./$BIN"
+        "cd $DIR && ./$BIN > /dev/null"
 elif config_preset == "gem5":
     run_command = "build/GCN3_X86/gem5.opt configs/multigpu/multigpu_se.py " +\
         "-c $DIR/$BIN -n4 --dgpu --gfx-version=gfx803 --reg-alloc-policy=dynamic"

@@ -6,15 +6,16 @@ from define import Test
 run_test = {
     Test.kernel_limits:     False,
     Test.verify_limits:     False,
-    Test.l1i_linesize:      False,
-    Test.icache_hierarchy:  False,
+    Test.l1i_linesize:      True,
+    Test.icache_hierarchy:  True,
     Test.mp_and_buffers:    False,
-    Test.exec_units:        True,
+    Test.functional_units:  False,
 }
 
 # Test configuration value definition
 class CKPT(Enum):
     shared_memory_test_granularity = auto()
+    register_test_granulatiry = auto()
     max_icache_investigate_size_KiB = auto()
     nslot_timeout_multiplier = auto()
     mab_skip_num_mp_and_use = auto()
@@ -26,8 +27,12 @@ class CKPT(Enum):
 values = {
     ## The test result related to the shared memory will have the accuracy of
     ## following granularity. Smaller value = more accurate = more time-consuming.
-    ### USED IN: verify_limits, sharedmem_size
+    ### USED IN: verify_limits, mp_and_buffers
     CKPT.shared_memory_test_granularity: 1024,
+    ## The test result related to the register file will have the accuracy of
+    ## following granularity. Smaller value = more accurate = more time-consuming.
+    ### USED IN: verify_limits, mp_and_buffers
+    CKPT.register_test_granulatiry: 16,
 
     ## The icache hierarchy will be investigated up to the following size (KiB).
     ## For gpgpusim with lengauer-tarjan algorithm, 128 is recommended.
