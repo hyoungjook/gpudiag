@@ -3,6 +3,9 @@ sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from define import Feature
 import config_ckpt as ckpt
 
+def verify_constraint(result_values, proj_path):
+    return True
+
 def generate_nvidia(result_values):
     limit_shmem = int(result_values[Feature.limit_sharedmem_per_block][0])
     l1i_line_size = int(result_values[Feature.l1i_linesize][0])

@@ -42,6 +42,13 @@ def get_values_from_result_txt(result_file):
             values[feat] = val.split(',')
     return values
 
+def verify_constraints(test, proj_path):
+    testname = test.name
+    result_txt = os.path.join(proj_path, "result.txt")
+    result_values = get_values_from_result_txt(result_txt)
+    kgen = importlib.import_module("kernels." + testname)
+    return kgen.verify_constraint(result_values, proj_path)
+
 def inline_c_array_str(i, values):
     if i == 0:
         return values[0]
@@ -194,37 +201,52 @@ def create_graph_directory(proj_path):
 
 def draw_graph(line, test, proj_path):
     # format: @title:dataN:xlabel:x0:dx:ylabel:y0,y1,...,yn\n
-    # optional line drawings: ..., yn:a,b,label:a,b,label:...\n where y=ax+b
+    # or, instead of :x0:dx:, xdata manually with :p:x0,x1,...,xn:
+    # optional line drawings: ..., yn:a,b,label\n where y=ax+b
     plt.clf()
     if line[0] != '@':
         exit(1)
-    line = line[1:]
-    line = line.replace('\n', '')
-    tokens = line.split(':')
-    title = tokens[0]
-    dataN = int(tokens[1])
+    tokens = line[1:].replace('\n', '').split(':')
+    title = tokens[0] ; dataN = int(tokens[1])
+    # xdata
     xlabel = tokens[2]
-    x0 = float(tokens[3])
-    dx = float(tokens[4])
+    max_x = 0 ; max_y = 0 ; xdata = []
+    if tokens[3] != 'p':
+        x0 = float(tokens[3]) ; dx = float(tokens[4])
+        for i in range(dataN):
+            xdata += [x0 + i * dx]
+        max_x = x0 + (dataN-1) * dx
+    else:
+        xstrs = tokens[4].split(',')
+        for i in range(dataN):
+            xdata += [float(xstrs[i])]
+            max_x = max(max_x, xdata[i])
+    # ydata
     ylabel = tokens[5]
-    ystrs = tokens[6].split(',')
-    xdata = []
-    ydata = []
+    ydata = [] ; ystrs = tokens[6].split(',')
     for i in range(dataN):
-        xdata += [x0 + i * dx]
         ydata += [float(ystrs[i])]
+        max_y = max(max_y, ydata[i])
+    # figure name
     figure_name = title.replace(' ', '_').replace('(', '_').replace(')', '_')
     figure_path = os.path.join(proj_path, "result_graphs/",\
         test.name + "_" + figure_name + ".png")
-    addl_xdata = [0] + xdata
-    for i in range(len(tokens)-7):
-        slope = float(tokens[7+i].split(',')[0])
-        y_intercept = float(tokens[7+i].split(',')[1])
-        linelabel = tokens[7+i].split(',')[2]
-        addl_ydata = []
-        for i in range(len(addl_xdata)):
-            addl_ydata += [y_intercept + slope * addl_xdata[i]]
-        plt.plot(addl_xdata, addl_ydata, 'k--', label=linelabel)
+    # additional line
+    if len(tokens) > 7:
+        slope = float(tokens[7].split(',')[0])
+        y_itcpt = float(tokens[7].split(',')[1])
+        linelabel = tokens[7].split(',')[2]
+        addline_x = []; addline_y = []
+        if slope == 0:
+            addline_x = [0, max_x] ; addline_y = [y_itcpt, y_itcpt]
+        else:
+            x_at_maxy = (max_y - y_itcpt) / slope
+            if x_at_maxy < max_x:
+                addline_x = [0, x_at_maxy] ; addline_y = [y_itcpt, max_y]
+            else:
+                addline_x = [0, max_x] ; addline_y = [y_itcpt, y_itcpt+slope*max_x]
+        plt.plot(addline_x, addline_y, 'k--', label=linelabel)
+    # plot
     plt.plot(xdata, ydata, 'ko')
     if len(tokens) > 7:
         plt.legend()
@@ -275,6 +297,8 @@ if __name__ == "__main__":
                 get_values_from_result_txt(os.path.join(project_path, "result.txt"))):
                 exit(1)
         else:
+            if not verify_constraints(test, project_path):
+                exit(1)
             if not compile(test, project_path):
                 exit(1)
             if not run(test, project_path):

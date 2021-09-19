@@ -34,7 +34,7 @@ class EUTest:
 ### Modify of add the target insts to the lists below!
 
 nvidia_insts_to_test = [
-    EUTest(True, "br", 100, 5,
+    EUTest(False, "br", 100, 5,
         "",
         lambda i: "asm volatile(\"MT_BR_{}: bra MT_BR_{};\\n\");\n".format(i, i+1),
         lambda n: "asm volatile(\"MT_BR_{}:\");\n".format(n), 0, 0),
@@ -118,6 +118,30 @@ amd_insts_to_test = [
 
 ### ========== End of checkpoint options ==========
 
+def measure_latency_code(repeat, name, inicode, repcode, fincode):
+    code = """\
+__global__ void measure_latency_{}(uint64_t *result){{
+    uint64_t sclk, eclk;
+""".format(name)
+    code += inicode
+    code += """\
+#pragma unroll 1
+    for (int i=0; i<2; i++) { // icache warmup
+        __syncthreads();
+        sclk = clock();
+"""
+    for i in range(repeat):
+        code += repcode(i)
+    code += fincode
+    code += """\
+        __syncthreads();
+        eclk = clock();
+    }
+    if (hipThreadIdx_x == 0) *result = eclk - sclk;
+}
+"""
+    return code
+
 def kernel_code_func(test_list):
     lat_rep = ckpt.values[ckpt.CKPT.eu_latency_repeats]
     num_running_tests = 0
@@ -125,7 +149,7 @@ def kernel_code_func(test_list):
     for eut in test_list:
         if not eut.run:
             continue
-        code += reused_codes.measure_latency_code(lat_rep, eut.name,\
+        code += measure_latency_code(lat_rep, eut.name,\
             eut.inicode, eut.repcode, eut.fincode(lat_rep))
         num_running_tests += 1
         if eut.dont_measure_width:
@@ -161,6 +185,9 @@ const char *op_names[{}] = {{
         code += "\"{}\",\n".format(eut.name)
     code += "};\n"
     return code
+
+def verify_constraint(result_values, proj_path):
+    return True
 
 def generate_nvidia(result_values):
     return kernel_code_func(nvidia_insts_to_test)

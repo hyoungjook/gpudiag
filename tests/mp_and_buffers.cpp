@@ -5,27 +5,41 @@
 #define warp_size
 #define limit_threads_per_block
 #define limit_sharedmem_per_block
+#define limit_registers_per_thread
+#define LRpB_test_info0
+#define LRpB_test_data0
+#define LRpB_test_info1
+#define LRpB_test_data1
 
 #define ckpt_nslot_timeout_multiplier
 #define ckpt_shared_memory_test_granularity
+#define ckpt_register_test_granularity
 #define ckpt_mab_skip_num_mp_and_use
-#define ckpt_mab_skip_bbsize_and_use
+#define ckpt_mab_skip_wsb_and_use_n1
+#define ckpt_mab_skip_wsb_and_use_n2
+#define ckpt_mab_skip_wsb_and_use_nat1
 #define ckpt_mab_skip_shmem
+#define ckpt_mab_skip_regfile
 
 #include "tool.h"
 #include "mp_and_buffers.h"
 #include <vector>
 
+#define MAX(a, b) ((a)>(b)?(a):(b))
+#define MIN(a, b) ((a)<(b)?(a):(b))
+
 // returns num_mp
 uint32_t num_mp_test();
 // returns barrier_buffer_size
-uint32_t warpstatebuffer_test(uint32_t num_mp);
-void sharedmemory_test(uint32_t num_mp, uint32_t barrier_buffer_size);
+void warpstatebuffer_test(uint32_t num_mp, int *out_Nslots);
+void sharedmemory_test(uint32_t num_mp, int Nslot_n1n2_at1);
+template <int regtype>
+void registerfile_test(uint32_t num_mp, int *in_Nslot_n1n2);
 
-uint64_t test_nslot_warpstatebuffer(uint32_t G, int b, uint64_t timeout);
-int measure_nslot_warpstatebuffer(int b, uint32_t num_mp);
-uint64_t test_nslot_sharedmem(uint32_t G, int s_idx, uint64_t timeout);
-int measure_nslot_sharedmem(int s_idx, uint32_t num_mp);
+uint64_t test_nslot(uint32_t G, uint32_t B, uint64_t timeout,
+    void (*kernel)(uint32_t*,uint32_t,uint64_t,uint32_t*,uint64_t*));
+int measure_nslot(uint32_t num_mp, uint32_t B,
+    void (*kernel)(uint32_t*,uint32_t,uint64_t,uint32_t*,uint64_t*));
 
 int main(int argc, char **argv) {
     CHECK(hipSetDevice(0));
@@ -38,15 +52,32 @@ int main(int argc, char **argv) {
     }
     else num_mp = ckpt_mab_skip_num_mp_and_use;
 
-    if (ckpt_mab_skip_bbsize_and_use <= 0) {
+    int Nslot_n1n2[limit_threads_per_block / warp_size];
+    if (ckpt_mab_skip_wsb_and_use_n1 <= 0 ||
+        ckpt_mab_skip_wsb_and_use_n2 <= 0 ||
+        ckpt_mab_skip_wsb_and_use_nat1 <= 0) {
         printf("Running warpstatebuffer test..\n");
-        barrier_buffer_size = warpstatebuffer_test(num_mp);
+        warpstatebuffer_test(num_mp, Nslot_n1n2);
     }
-    else barrier_buffer_size = ckpt_mab_skip_bbsize_and_use;
+    else { // fill in Nslot_n1n2 using ckpt values
+        Nslot_n1n2[0] = ckpt_mab_skip_wsb_and_use_nat1;
+        for (int b=2; b<=limit_threads_per_block/warp_size; b++) {
+            Nslot_n1n2[b-1] = MIN(ckpt_mab_skip_wsb_and_use_n1,
+                ckpt_mab_skip_wsb_and_use_n2 / b);
+        }
+    }
 
     if (ckpt_mab_skip_shmem <= 0) {
         printf("Running sharedmemory test..\n");
-        sharedmemory_test(num_mp, barrier_buffer_size);
+        sharedmemory_test(num_mp, Nslot_n1n2[0]);
+    }
+
+    if (ckpt_mab_skip_regfile <= 0) {
+        printf("Running registerfile test..\n");
+        registerfile_test<0>(num_mp, Nslot_n1n2);
+#if MANUFACTURER == 0
+        registerfile_test<1>(num_mp, Nslot_n1n2);
+#endif
     }
     
     return 0;
@@ -160,52 +191,198 @@ uint32_t num_mp_test() {
     return num_mp;
 }
 
-uint32_t warpstatebuffer_test(uint32_t num_mp) {
+void warpstatebuffer_test(uint32_t num_mp, int *out_Nslots) {
     const int iter_num = limit_threads_per_block / warp_size;
     int Nbuf[iter_num];
+    float inv_b[iter_num];
     for (int b=1; b<=iter_num; b++) {
-        Nbuf[b-1] = measure_nslot_warpstatebuffer(b, num_mp);
+        Nbuf[b-1] = measure_nslot(num_mp, b*warp_size, measure_warpstatebuffer);
+        inv_b[b-1] = 1.0f / (float)b;
     }
-    uint32_t barrier_buffer_size;
-    uint32_t wsb_size_min = 0, wsb_size_max = 0xFFFFFFFF;
-    int non_N1_data_cnt = 0;
-    bool N2_conflict_occurred = false;
-    for (int b=iter_num; b>=1; b--) {
-        int n_at_b = Nbuf[b-1];
-        non_N1_data_cnt++;
-        // possible values for N2
-        uint32_t min, max;
-        min = n_at_b * b; max = (n_at_b + 1) * b - 1;
-        // intersection
-        uint32_t tmp_wsb_size_min = wsb_size_min>min?wsb_size_min:min;
-        uint32_t tmp_wsb_size_max = wsb_size_max<max?wsb_size_max:max;
-        if (tmp_wsb_size_min > tmp_wsb_size_max) {
-            N2_conflict_occurred = true;
-            barrier_buffer_size = (uint32_t)n_at_b;
-            break;
-        }
-        wsb_size_min = tmp_wsb_size_min;
-        wsb_size_max = tmp_wsb_size_max;
+    // analyze
+    bool is_N1_inf_at_1 = false;
+    uint32_t N1, N2 = 0;
+    for (int b=1; b<=iter_num; b++) N2 = MAX(N2, b*Nbuf[b-1]);
+    if (Nbuf[0] == Nbuf[1]) {N1 = Nbuf[0];}
+    else {
+        if (Nbuf[1] == N2 / 2) {N1 = Nbuf[0];}
+        else {N1 = Nbuf[1]; is_N1_inf_at_1 = true;}
     }
-    if (!N2_conflict_occurred) barrier_buffer_size = (uint32_t)Nbuf[0];
+    // write
     write_line("# 4. Warp state buffer Nslot raw data");
-    write_graph_data("Warp state buffer size", iter_num,
-        "BlockDim", 1, 1, "Nslot", Nbuf);
-    char buf[100];
-    write_line("# 5. Warp state buffer analysis");
-    int bufptr = sprintf(buf, "# Found %d non-N1 data", non_N1_data_cnt);
-    if (non_N1_data_cnt == 0) bufptr += sprintf(buf+bufptr, ": unable to analyze N2");
-    write_line(buf);
-    write_value("barrier_buffer_size", barrier_buffer_size);
-    if (non_N1_data_cnt > 0) {
-        write_line("# [min possible value, max possible value]");
-        int wsb_size[2]; wsb_size[0] = wsb_size_min; wsb_size[1] = wsb_size_max;
-        write_values("warp_state_buffer_size", wsb_size, 2);
-    }
-    return barrier_buffer_size;
+    write_graph_data_xs_with_line("Warp state buffer", iter_num,
+        "1/b", inv_b, "Nslot", Nbuf, N2, 0, "max slope");
+    if (is_N1_inf_at_1) write_line("## N1 is infinity at b=1");
+    write_value("barrier_buffer_size", N1);
+    write_value("warp_state_buffer_size", N2);
+    for (int i=0; i<iter_num; i++) out_Nslots[i] = Nbuf[i];
 }
 
-uint64_t test_nslot_warpstatebuffer(uint32_t G, int b, uint64_t timeout) {
+bool shmem_data_consistent(uint64_t S, uint64_t s_min, int N, int *nbuf,
+        int shmem_unit, int Nslot_n1n2_at1) {
+    for (int i=0; i<N; i++) {
+        if (nbuf[i] >= Nslot_n1n2_at1) continue;
+        uint64_t test_s = (i+1) * shmem_unit;
+        test_s = (test_s + s_min - 1) / s_min * s_min; // ceil(test_s, s_min)
+        if (nbuf[i] != S / test_s) return false;
+    }
+    return true;
+}
+
+void sharedmemory_test(uint32_t num_mp, int Nslot_n1n2_at1) {
+    const int shmem_unit = ckpt_shared_memory_test_granularity;
+    const int iter_num = limit_sharedmem_per_block / shmem_unit;
+    int Nbuf[iter_num];
+    float inv_s[iter_num];
+    for (int i=0; i<iter_num; i++) {
+        Nbuf[i] = measure_nslot(num_mp, 1, measure_shmem[i]);
+        inv_s[i] = 1.0f / (float)((i+1)*shmem_unit);
+    }
+    // analyze
+    uint64_t S = 0;
+    for (int i=0; i<iter_num; i++) S = MAX(S, (i+1)*shmem_unit*Nbuf[i]);
+    uint64_t s_min = shmem_unit;
+    bool s_min_strange = false;
+    while(true) {
+        if (shmem_data_consistent(S, s_min, iter_num, Nbuf,
+                shmem_unit, Nslot_n1n2_at1)) {
+            break;
+        }
+        s_min *= 2;
+        if (s_min >= S) {s_min_strange = true; break;}
+    }
+    // write
+    write_line("# 5. Shared memory Nslot raw data");
+    write_graph_data_xs_with_line("Shared memory", iter_num,
+        "1/s (1/Bytes)", inv_s, "Nslot", Nbuf, S, 0, "max slope");
+    write_value("shared_memory_size", S);
+    if (s_min_strange) write_line("## cannot measure s_min automatically..");
+    else {
+        if (s_min == shmem_unit) write_line("## s_min is less or equal than below!");
+        write_value("shared_memory_alloc_unit", s_min);
+    }
+}
+
+bool regfile_data_consistent(uint64_t R, uint64_t r_min, int min_R, int reg_unit,
+        int Nr, int Nb, int (*nbuf)[limit_threads_per_block/warp_size], int *Nslot_n1n2) {
+    for (int i=0; i<Nr; i++) {
+        for (int b=1; b<=Nb; b++) {
+            if (nbuf[i][b-1] < 0) continue;
+            if (nbuf[i][b-1] >= Nslot_n1n2[b-1]) continue;
+            uint64_t test_r = min_R + i * reg_unit;
+            test_r = (test_r + r_min - 1) / r_min * r_min; // ceil(test_r, r_min)
+            if (nbuf[i][b-1] != R / (test_r * b)) return false;
+        }
+    }
+    return true;
+}
+
+template <int regtype>
+void registerfile_test(uint32_t num_mp, int *in_Nslot_n1n2) {
+    const int num_regs = regtype==0?LRpB_test_info0(0):LRpB_test_info1(0);
+    const int min_R = regtype==0?LRpB_test_info0(1):LRpB_test_info1(1);
+    const int reg_unit = regtype==0?LRpB_test_info0(2):LRpB_test_info1(2);
+    if (reg_unit != ckpt_register_test_granularity) {
+        printf("register_test_granularity in config_ckpt.py not consistent with "
+            "LRpB_test_info in result.txt!\n"
+            "Please change ckpt value or run verify_limits again.\n");
+        exit(1);
+    }
+    const int max_possible_b = limit_threads_per_block / warp_size;
+#if MANUFACTURER == 1
+    uint32_t regkernel_min = REGKERNEL_REG_MIN_R;
+#else
+    uint32_t regkernel_min = regtype==0?REGKERNEL_SREG_MIN_R:REGKERNEL_VREG_MIN_R;
+#endif
+    int Nbuf[num_regs][max_possible_b];
+    for (int i=0; i<num_regs; i++) for (int j=0; j<max_possible_b; j++) Nbuf[i][j]=-1;
+
+
+    int num_nonzero_data = 0;
+    int regkern_idx = 0;
+    for (int i=0; i<num_regs; i++) {
+        uint32_t testR = min_R + i * reg_unit;
+        if (testR < regkernel_min) continue;
+        uint32_t max_b_at_R = regtype==0?LRpB_test_data0(i):LRpB_test_data1(i);
+        for (int b=1; b<=max_b_at_R; b++) {
+#if MANUFACTURER == 1
+            Nbuf[i][b-1] = measure_nslot(num_mp, b*warp_size, measure_reg[regkern_idx]);
+#else
+            if (regtype == 0)
+                Nbuf[i][b-1] = measure_nslot(num_mp, b*warp_size, measure_sreg[regkern_idx]);
+            else
+                Nbuf[i][b-1] = measure_nslot(num_mp, b*warp_size, measure_vreg[regkern_idx]);
+#endif
+            num_nonzero_data++;
+        }
+        regkern_idx++;
+    }
+
+    // analyze
+    uint64_t R = 0;
+    int *serialNbuf = (int*)malloc(num_nonzero_data * sizeof(int));
+    float *serialInvRB = (float*)malloc(num_nonzero_data * sizeof(float));
+    int serialIdx = 0;
+    for (int i=0; i<num_regs; i++) {
+        uint32_t testR = min_R + i * reg_unit;
+        if (testR < regkernel_min) continue;
+        for (int b=1; b<=max_possible_b; b++) {
+            if (Nbuf[i][b-1] < 0) continue;
+            R = MAX(R, testR * b * Nbuf[i][b-1]);
+            serialNbuf[serialIdx] = Nbuf[i][b-1];
+            serialInvRB[serialIdx] = 1.0f / (float)(testR * b); serialIdx++;
+        }
+    }
+    uint64_t r_min = reg_unit;
+    bool r_min_strange = false;
+    while(true) {
+        if (regfile_data_consistent(R, r_min, min_R, reg_unit,
+                num_regs, max_possible_b, Nbuf, in_Nslot_n1n2)) {
+            break;
+        }
+        r_min *= 2;
+        if (r_min >= R) {r_min_strange = true; break;}
+    }
+    // write
+#if MANUFACTURER == 1
+    write_line("# 6. Register file Nslot raw data");
+    write_graph_data_xs_with_line("Register file size", num_nonzero_data,
+        "1/(rb)", serialInvRB, "Nslot", serialNbuf, R, 0, "max slope");
+    write_value("register_file_size", R);
+    if (r_min_strange) write_line("## cannot measure r_min automatically..");
+    else {
+        if (r_min == reg_unit) write_line("## r_min is less or equal than below!");
+        write_value("register_file_alloc_unit", r_min);
+    }
+#else
+    if (regtype == 0) {
+        write_line("# 6. Scalar register file Nslot raw data");
+        write_graph_data_xs_with_line("Scalar register file size", num_nonzero_data,
+            "1/(rb)", serialInvRB, "Nslot", serialNbuf, R, 0, "max slope");
+        write_value("scalar_register_file_size", R);
+        if (r_min_strange) write_line("## cannot measure r_s,min automatically..");
+        else {
+            if (r_min == reg_unit) write_line("## r_s,min is less or equal than below!");
+            write_value("scalar_register_file_alloc_unit", r_min);
+        }
+    }
+    else {
+        write_line("# 7. Vector register file Nslot raw data");
+        write_graph_data_xs_with_line("Vector register file size", num_nonzero_data,
+            "1/(rb)", serialInvRB, "Nslot", serialNbuf, R, 0, "max_slope");
+        write_value("vector_register_file_size", R);
+        if (r_min_strange) write_line("## cannot measure r_v,min automatically..");
+        else {
+            if (r_min == reg_unit) write_line("## r_v,min is less or equal than below!");
+            write_value("vectorr_register_file_alloc_unit", r_min);
+        }
+    }
+#endif
+    free(serialNbuf); free(serialInvRB);
+}
+
+uint64_t test_nslot(uint32_t G, uint32_t B, uint64_t timeout,
+        void (*kernel)(uint32_t*,uint32_t,uint64_t,uint32_t*,uint64_t*)) {
     uint32_t hsync = 0, *dsync, h_isto = 0, *d_isto;
     hipMalloc(&dsync, sizeof(uint32_t));
     hipMalloc(&d_isto, sizeof(uint32_t));
@@ -215,8 +392,7 @@ uint64_t test_nslot_warpstatebuffer(uint32_t G, int b, uint64_t timeout) {
     hclks = (uint64_t*)malloc(G * sizeof(uint64_t));
     hipMalloc(&dclks, G * sizeof(uint64_t));
 
-    hipLaunchKernelP(measure_warpstatebuffer,
-        dim3(G), dim3(b * warp_size), 0, 0,
+    hipLaunchKernelP(kernel, dim3(G), dim3(B), 0, 0,
         dsync, G, timeout, d_isto, dclks);
     hipStreamSynchronize(0);
     hipMemcpy(&h_isto, d_isto, sizeof(uint32_t), hipMemcpyDeviceToHost);
@@ -232,98 +408,15 @@ uint64_t test_nslot_warpstatebuffer(uint32_t G, int b, uint64_t timeout) {
     hipFree(dsync); hipFree(d_isto); hipFree(dclks); free(hclks);
     return retval;
 }
-int measure_nslot_warpstatebuffer(int b, uint32_t num_mp) {
+int measure_nslot(uint32_t num_mp, uint32_t B,
+        void (*kernel)(uint32_t*,uint32_t,uint64_t,uint32_t*,uint64_t*)) {
     const int timeout_threshold = ckpt_nslot_timeout_multiplier;
     // initial timeout
-    uint64_t timeout = test_nslot_warpstatebuffer(num_mp, b, 0) * timeout_threshold;
+    uint64_t timeout = test_nslot(num_mp, B, 0, kernel) * timeout_threshold;
     int testN = 1;
     while(true) {
         uint32_t testG = testN * num_mp + 1;
-        uint64_t ret = test_nslot_warpstatebuffer(testG, b, timeout) * timeout_threshold;
-        if (ret == 0) break;
-        else timeout = timeout>ret?timeout:ret;
-        testN++;
-    }
-    return testN;
-}
-
-void sharedmemory_test(uint32_t num_mp, uint32_t barrier_buffer_size) {
-    const int shmem_unit = ckpt_shared_memory_test_granularity;
-    const int iter_num = limit_sharedmem_per_block / shmem_unit;
-    int Nbuf[iter_num];
-    for (int i=0; i<iter_num; i++) {
-        Nbuf[i] = measure_nslot_sharedmem(i, num_mp);
-    }
-    uint64_t shm_size_min = barrier_buffer_size, shm_size_max = 0xFFFFFFFFFFFFFFFF;
-    int non_N1_data_cnt = 0;
-    bool S_conflict_occurred = false;
-    for (int i=0; i<iter_num; i++) {
-        uint64_t test_s = shmem_unit * (i+1);
-        int n_at_s = Nbuf[i];
-        if (n_at_s >= barrier_buffer_size) continue; // truncated data
-        non_N1_data_cnt++;
-        // possible values for S
-        uint32_t min, max;
-        min = n_at_s * test_s; max = (n_at_s + 1) * test_s - 1;
-        // intersection
-        shm_size_min = shm_size_min>min?shm_size_min:min;
-        shm_size_max = shm_size_max<max?shm_size_max:max;
-        if (shm_size_min > shm_size_max) {
-            S_conflict_occurred = true;
-        }
-    }
-    write_line("# 6. Shared memory Nslot raw data");
-    write_graph_data("Shared memory size", iter_num,
-        "kernel sharedmem size (B)", shmem_unit, shmem_unit,
-        "Nslot", Nbuf);
-    write_line("# 7. Shared memory analysis");
-    char buf[100];
-    int bufptr = sprintf(buf, "# Found %d non-N1 data", non_N1_data_cnt);
-    if (non_N1_data_cnt == 0) bufptr += sprintf(buf+bufptr, ": unable to analyze N2");
-    if (S_conflict_occurred) bufptr += sprintf(buf+bufptr, ", but conflict occurred");
-    write_line(buf);
-    if (non_N1_data_cnt > 0 && !S_conflict_occurred) {
-        write_line("# [min possible value, max possible value]");
-        int shm_size[2]; shm_size[0] = shm_size_min; shm_size[1] = shm_size_max;
-        write_values("shared_memory_size", shm_size, 2);
-    }
-}
-
-uint64_t test_nslot_sharedmem(uint32_t G, int s_idx, uint64_t timeout) {
-    uint32_t hsync, *dsync, h_isto, *d_isto;
-    hipMalloc(&dsync, sizeof(uint32_t));
-    hipMalloc(&d_isto, sizeof(uint32_t));
-    hsync = 0; h_isto = 0;
-    hipMemcpy(dsync, &hsync, sizeof(uint32_t), hipMemcpyHostToDevice);
-    hipMemcpy(d_isto, &h_isto, sizeof(uint32_t), hipMemcpyHostToDevice);
-    uint64_t *hclks, *dclks;
-    hclks = (uint64_t*)malloc(G * sizeof(uint64_t));
-    hipMalloc(&dclks, G * sizeof(uint64_t));
-
-    hipLaunchKernelP(measure_shmem[s_idx], dim3(G), dim3(1), 0, 0,
-        dsync, G, timeout, d_isto, dclks);
-    hipStreamSynchronize(0);
-    hipMemcpy(&h_isto, d_isto, sizeof(uint32_t), hipMemcpyDeviceToHost);
-    hipMemcpy(hclks, dclks, G * sizeof(uint64_t), hipMemcpyDeviceToHost);
-
-    uint64_t retval;
-    if (h_isto == 1) retval = 0;
-    else {
-        uint64_t max = 0;
-        for (int i=0; i<G; i++) max = max>hclks[i]?max:hclks[i];
-        retval = max;
-    }
-    hipFree(dsync); hipFree(d_isto); hipFree(dclks); free(hclks);
-    return retval;
-}
-int measure_nslot_sharedmem(int s_idx, uint32_t num_mp) {
-    const int timeout_threshold = ckpt_nslot_timeout_multiplier;
-    // initial timeout
-    uint64_t timeout = test_nslot_sharedmem(num_mp, s_idx, 0) * timeout_threshold;
-    int testN = 1;
-    while(true) {
-        uint32_t testG = testN * num_mp + 1;
-        uint64_t ret = test_nslot_sharedmem(testG, s_idx, timeout) * timeout_threshold;
+        uint64_t ret = test_nslot(testG, B, timeout, kernel) * timeout_threshold;
         if (ret == 0) break;
         else timeout = timeout>ret?timeout:ret;
         testN++;

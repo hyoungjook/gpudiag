@@ -2,6 +2,9 @@ import sys, os
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from define import Feature
 
+def verify_constraint(result_values, proj_path):
+    return True
+
 def generate_nvidia(result_values):
     num_repeat = int(result_values[Feature.limit_registers_per_thread][0]) - 10
     code = """\

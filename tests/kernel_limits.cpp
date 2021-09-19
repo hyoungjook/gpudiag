@@ -41,6 +41,7 @@ int main(int argc, char **argv) {
 #endif
     limit_registers_per_block = prop.regsPerBlock;
     warp_size = prop.warpSize;
+    limit_registers_per_block /= warp_size; // we define this way!
 
     write_init("kernel_limits");
     write_line("# following values are from hipDeviceProp_t, not verified yet");

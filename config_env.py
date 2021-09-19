@@ -1,5 +1,5 @@
-##config_preset = "gpgpusim"
-config_preset = "gem5"
+config_preset = "gpgpusim"
+##config_preset = "gem5"
 ##config_preset = "custom"
 
 #============================================================================
