@@ -14,6 +14,9 @@
     }\
 }
 
+#define MAX(a, b) ((a)>(b)?(a):(b))
+#define MIN(a, b) ((a)<(b)?(a):(b))
+
 #define hipLaunchKernelP(name, g, b, shm, str, ...) \
 {printf("  Launched " #name ": (G,B)=(%d,%d)\n",(int)g.x,(int)b.x); fflush(stdout);\
 hipLaunchKernelGGL(name, g, b, shm, str, __VA_ARGS__);}
@@ -22,7 +25,7 @@ hipLaunchKernelGGL(name, g, b, shm, str, __VA_ARGS__);}
 
 void write_init(const char *testname) {
     std::ofstream out(REPORT_DIR OUT_NAME);
-    out << "## " << testname << " report" << std::endl;
+    out << "## ========== " << testname << " report ==========" << std::endl;
     out.close();
 }
 

@@ -39,7 +39,7 @@ if config_preset == "gpgpusim":
         "-gencode arch=compute_75,code=sm_75 $SRC -o $BIN -Xptxas=-O0"
 elif config_preset == "gem5":
     compile_command = "/opt/rocm/hip/bin/hipcc --amdgpu-target=gfx803 " +\
-        "$SRC -o $BIN"
+        "$SRC -o $BIN -O1"
 else:
     compile_command = ""
 
@@ -51,9 +51,9 @@ else:
 
 if config_preset == "gpgpusim":
     run_command = "export CUDA_INSTALL_PATH=/usr/local/cuda && " +\
-        ". ./setup_environment debug > /dev/null && " +\
+        ". ./setup_environment debug && " +\
         "cp configs/tested-cfgs/SM75_RTX2060_notperfect/gpgpusim.config $DIR && " +\
-        "cd $DIR && ./$BIN > /dev/null"
+        "cd $DIR && ./$BIN"
 elif config_preset == "gem5":
     run_command = "build/GCN3_X86/gem5.opt configs/multigpu/multigpu_se.py " +\
         "-c $DIR/$BIN -n4 --dgpu --gfx-version=gfx803 --reg-alloc-policy=dynamic"

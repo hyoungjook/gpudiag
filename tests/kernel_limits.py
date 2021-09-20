@@ -6,8 +6,49 @@ import config_env as conf
 import config_ckpt as ckpt
 import kernels.reused_codes as tool
 
-## test kernels: assures provided resource usage.
-## on normal execution, saves 1 to *r and exits.
+def get_from_deviceprop(out_dir):
+    return """\
+#define MANUFACTURER {}
+#define REPORT_DIR "{}"
+#include "tool.h"
+int main(int argc, char **argv) {{
+    CHECK(hipSetDevice(0));
+    hipDeviceProp_t prop;
+    CHECK(hipGetDeviceProperties(&prop, 0));
+    write_init("prop_values");
+    write_value("0", prop.warpSize);
+    write_value("1", prop.maxThreadsPerBlock);
+    write_value("2", prop.maxGridSize[0]);
+    write_value("3", prop.sharedMemPerBlock);
+#if MANUFACTURER == 1
+    write_value("4", 255);
+    write_value("5", prop.regsPerBlock / prop.warpSize);
+#else
+    uint32_t buf[2]; buf[1] = 256;
+    if (prop.gcnArch < 1000) buf[0] = 102;
+    else buf[0] = 106;
+    write_values("4", buf, 2);
+    buf[0] = buf[1] = prop.regsPerBlock / prop.warpSize;
+    write_values("5", buf, 2);
+#endif
+    return 0;
+}}\n""".format(1 if conf.gpu_manufacturer=="nvidia" else 0, out_dir+"/prop_")
+
+def parse_prop_report(report_file):
+    report = open(report_file, 'r')
+    ret = ["", "", "", "", "", ""]
+    for l in report.readlines():
+        if l[0] != '#':
+            ret[int(l[0])] = l[2:].replace('\n','').replace('[','').replace(']','')
+    report.close()
+    if ret[4].find(',') >= 0:
+        ret4 = [int(ret[4].split(',')[0]), int(ret[4].split(',')[1])]
+        ret5 = [int(ret[5].split(',')[0]), int(ret[5].split(',')[1])]
+    else:
+        ret4 = int(ret[4])
+        ret5 = int(ret[5])
+    return (int(ret[0]), int(ret[1]), int(ret[2]), int(ret[3]), ret4, ret5)
+
 def include():
     return """\
 #include "hip/hip_runtime.h"
@@ -292,7 +333,7 @@ uint32_t do_LRpB_test(uint32_t LRpT, uint32_t Reg_unit, uint32_t initLRpB,
         if (testR > LRpT) break;
         num_tests++; if (min_testR == 0) min_testR = testR;
         // measure max_b for testR
-        uint32_t max_b = get_max_true(chkfunc, initLRpB/testR/warp_size, regkern_idx);
+        uint32_t max_b = get_max_true(chkfunc, initLRpB/testR, regkern_idx);
         data[regkern_idx] = max_b; regkern_idx++;
         verifiedLRpB = verifiedLRpB>max_b*testR?verifiedLRpB:max_b*testR;
     }
@@ -457,7 +498,7 @@ void do_reg_chk(uint32_t maxLsRpT, uint32_t maxLvRpT,
     code += """\
 int main(int argc, char **argv) {{
     hipSetDevice(0);
-    write_init("verify_limits");
+    write_init("kernel_limits");
     do_thr_chk({}, {});
     do_shm_chk({}, {});\n""".format(propLTpB, propLTpG, compilableLSpB, LSpB_test_unit)
     if conf.gpu_manufacturer == "nvidia":
@@ -512,25 +553,19 @@ def checkfunc_LRpB_launchable_abort_nvidia(val, args):
 def set_default_if_zero(val, default):
     return val if val>0 else default
 
-def verify(proj_path, result_values):
-    out_dir = os.path.join(proj_path, "build/", conf.gpu_manufacturer, "verify_limits")
+def test_limits(proj_path, result_values):
+    out_dir = os.path.join(proj_path, "build/", conf.gpu_manufacturer, "kernel_limits")
     tool.print_and_exec("mkdir -p " + out_dir)
     tmp_src_file = os.path.join(out_dir, "tmp_src.cpp")
     tmp_obj_file = os.path.join(out_dir, "tmp_obj")
     getmax_args = [proj_path, out_dir, tmp_src_file, tmp_obj_file]
 
-    # load the result from kernel_limits test
-    propLTpB = int(result_values[Feature.limit_threads_per_block][0])
-    propLTpG = int(result_values[Feature.limit_threads_per_grid][0])
-    propLSpB = int(result_values[Feature.limit_sharedmem_per_block][0])
-    if conf.gpu_manufacturer == "nvidia":
-        propLRpT = int(result_values[Feature.limit_registers_per_thread][0])
-        propLRpB = int(result_values[Feature.limit_registers_per_block][0])
-    else:
-        propLRpT = [int(result_values[Feature.limit_registers_per_thread][0]),\
-                    int(result_values[Feature.limit_registers_per_thread][1])]
-        propLRpB = [int(result_values[Feature.limit_registers_per_block][0]),\
-                    int(result_values[Feature.limit_registers_per_block][1])]
+    # get values from hipDeviceProp_t
+    if not runnable(get_from_deviceprop(out_dir), getmax_args):
+        return False
+    (propW, propLTpB, propLTpG, propLSpB, propLRpT, propLRpB) =\
+        parse_prop_report(os.path.join(out_dir, "prop_report.txt"))
+
     # set default estimate value if prop is 0
     propLTpB = set_default_if_zero(propLTpB, 1024)
     propLTpG = set_default_if_zero(propLTpG, 1073741824)
@@ -560,7 +595,7 @@ def verify(proj_path, result_values):
     regmin = 0
     if conf.gpu_manufacturer == "nvidia":
         regmin = find_regmin_nvidia(compilableLRpT, getmax_args)
-    warp_size = int(result_values[Feature.warp_size][0])
+    warp_size = propW
     Reg_test_unit = ckpt.values[ckpt.CKPT.register_test_granularity]
     if not kernel_can_abort:
         if not runnable(
@@ -598,7 +633,7 @@ def verify(proj_path, result_values):
             max_b = get_max_true(
                 checkfunc_LRpB_launchable_abort_nvidia,
                 getmax_args + [regmin, testR, verifiedLTpB, warp_size],
-                propLRpB // testR // warp_size - 1) # -1: possible speedup
+                propLRpB // testR)
             maxb_for_LRpB += [max_b]
             verifiedLRpB = max(verifiedLRpB, max_b * testR)
 
@@ -627,6 +662,11 @@ def verify(proj_path, result_values):
         reportfile.write("LRpB_test_data1=[0, 0]\n")
         reportfile.write("limit_registers_per_block={}\n".format(verifiedLRpB))
         reportfile.close()
+
+    ## write prop warp size to the report
+    reportfile = open(os.path.join(out_dir, "report.txt"), 'a')
+    reportfile.write("warp_size={}\n".format(propW))
+    reportfile.close()
 
     return True
 

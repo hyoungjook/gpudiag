@@ -291,9 +291,9 @@ if __name__ == "__main__":
         if not ckpt.run_test[test]:
             continue
         start_time = datetime.now()
-        if test == Test.verify_limits:
-            verify_limit_test = importlib.import_module("tests." + test.name)
-            if not verify_limit_test.verify(project_path,\
+        if test == Test.kernel_limits:
+            kernel_limit_test = importlib.import_module("tests." + test.name)
+            if not kernel_limit_test.test_limits(project_path,\
                 get_values_from_result_txt(os.path.join(project_path, "result.txt"))):
                 exit(1)
         else:

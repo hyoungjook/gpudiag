@@ -119,13 +119,68 @@ void (*measure_shmem[{}])(uint32_t*, uint32_t, uint64_t, uint32_t*, uint64_t*) =
     code += "};\n"
     return code
 
+def measure_regfile_code(kernel_name, reg_val, manufacturer, is_sreg):
+    code = """\
+__global__ void {}(uint32_t *sync, uint32_t G,
+        uint64_t timeout, uint32_t *is_timeout, uint64_t *totalclk) {{
+    uint64_t sclk, eclk, toclk;
+    bool thread0 = (hipThreadIdx_x == 0);
+    bool chktime = (timeout != 0);
+    volatile uint32_t *chksync = sync;
+    __syncthreads();
+    sclk = clock();
+    toclk = sclk + timeout;
+    if (thread0) atomicAdd(sync, 1);
+    while(*chksync < G) {{
+        if (chktime && clock() > toclk) {{
+            *is_timeout = 1; return;
+        }}
+    }}
+    eclk = clock();
+    if (thread0) totalclk[hipBlockIdx_x] = eclk - sclk;
+    // ensure reg usage
+    if (G > 0) return; // do not execute, just compile
+""".format(kernel_name)
+    if manufacturer == "nvidia":
+        code += """\
+    asm volatile(".reg .b32 tr<{}>;\\n");
+    asm volatile(".reg .b64 addr;\\n");
+    asm volatile("mov.u64 addr, %0;\\n"::"l"(sync));
+    asm volatile(
+""".format(reg_val)
+        for i in range(reg_val):
+            code += "\"mov.u32 tr{}, %clock;\\n\"\n".format(i)
+        code += "\t);\n__syncthreads();\n\tasm volatile(\n"
+        for i in range(reg_val):
+            code += "\"st.global.u32 [addr+{}], tr{};\\n\"\n".format(4*i, i)
+        code += "\t);\n}\n"
+    else:
+        if is_sreg:
+            code += """\
+    uint32_t sdummy[{}];
+#pragma unroll {}
+    for(int i=0;i<{};i++) asm volatile("s_mov_b32 %0, 0\\n":"=s"(sdummy[i]));
+#pragma unroll {}
+    for(int i=0;i<{};i++) asm volatile("s_mov_b32 s0, %0\\n"::"s"(sdummy[i]));
+""".format(reg_val, reg_val, reg_val, reg_val, reg_val)
+        else:
+            code += """\
+    uint32_t vdummy[{}];
+#pragma unroll {}
+    for(int i=0;i<{};i++) asm volatile("v_mov_b32 %0, 0\\n":"=v"(vdummy[i]));
+#pragma unroll {}
+    for(int i=0;i<{};i++) asm volatile("v_mov_b32 v0, %0\\n"::"v"(vdummy[i]));
+""".format(reg_val, reg_val, reg_val, reg_val, reg_val)
+        code += "};\n"
+    return code
+
 ## global variable; calculated in verify_constraint(), used in generate_*()
 register_file_kernel_code_regmin = 0
 
 def calc_regcnt_from_regval_nvidia(regval, tmpsrc, tmpobj, proj_path):
     reused_codes.write_code(
         "#include <stdint.h>\n#include \"hip/hip_runtime.h\"\n" +\
-        reused_codes.measure_regfile_code(
+        measure_regfile_code(
         "test", regval, conf.gpu_manufacturer, False) +\
         "int main(){hipLaunchKernelGGL(test,dim3(1),dim3(1),0,0," +\
         "nullptr,0,0,nullptr,nullptr);return 0;}\n"
@@ -166,10 +221,10 @@ def generate_reg_kernel_set(LRpT, Reg_unit, manufacturer, is_sreg):
             min_R = testR
         # generate code for testR
         if manufacturer == "nvidia":
-            code += reused_codes.measure_regfile_code("measure_reg_{}".format(testR),
+            code += measure_regfile_code("measure_reg_{}".format(testR),
                 testR - register_file_kernel_code_regmin, "nvidia", False)
         else:
-            code += reused_codes.measure_regfile_code(
+            code += measure_regfile_code(
                 "measure_{}reg_{}".format('s' if is_sreg else 'v', testR),
                 testR, "amd", is_sreg)
     arrname = "reg"

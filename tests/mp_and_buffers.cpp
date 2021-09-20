@@ -25,9 +25,6 @@
 #include "mp_and_buffers.h"
 #include <vector>
 
-#define MAX(a, b) ((a)>(b)?(a):(b))
-#define MIN(a, b) ((a)<(b)?(a):(b))
-
 // returns num_mp
 uint32_t num_mp_test();
 // returns barrier_buffer_size
@@ -285,7 +282,7 @@ void registerfile_test(uint32_t num_mp, int *in_Nslot_n1n2) {
     if (reg_unit != ckpt_register_test_granularity) {
         printf("register_test_granularity in config_ckpt.py not consistent with "
             "LRpB_test_info in result.txt!\n"
-            "Please change ckpt value or run verify_limits again.\n");
+            "Please change ckpt value or run kernel_limits again.\n");
         exit(1);
     }
     const int max_possible_b = limit_threads_per_block / warp_size;

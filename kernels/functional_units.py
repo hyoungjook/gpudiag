@@ -69,6 +69,21 @@ nvidia_insts_to_test = [
         "asm volatile(\"mov.f32 mt_fop1, 0f3F000000;\\n\");\n",
         lambda i: "asm volatile(\"sin.approx.ftz.f32 mt_fop1, mt_fop1;\\n\");\n",
         lambda n: "", 0, 0),
+
+    EUTest(False, "shmem", 100, 1,
+        "asm volatile(\".shared .align 4 .b8 mt_shm[4];\\n\");\n" +
+        "asm volatile(\".reg .u32 mt_var;\\n\");\n" +
+        "asm volatile(\"mov.u32 mt_var, mt_shm;\\n\");\n" +
+        "asm volatile(\"st.shared.u32 [mt_shm], mt_var;\\n\");\n",
+        lambda i: "asm volatile(\"ld.shared.u32 mt_var, [mt_var];\\n\");\n",
+        lambda n: "", 0, 0),
+
+    EUTest(False, "gmem", 100, 1,
+        "asm volatile(\".reg .u64 mt_addr;\\n\");\n" +
+        "asm volatile(\"mov.b64 mt_addr, %0;\\n\"::\"l\"(result));\n" +
+        "asm volatile(\"st.global.u64 [mt_addr], mt_addr;\\n\");\n",
+        lambda i: "asm volatile(\"ld.global.u64 mt_addr, [mt_addr];\\n\");\n",
+        lambda n: "", 0, 0),
 ]
 
 amd_insts_to_test = [
@@ -112,6 +127,29 @@ amd_insts_to_test = [
     EUTest(False, "v_add", 100, 5,
         "uint32_t vop1 = 0, sop1 = 3;\n",
         lambda i: "asm volatile(\"v_add_u32 %0, vcc, %0, %1\\n\":\"+v\"(vop1):\"s\"(sop1));\n",
+        lambda n: "", 0, 0),
+
+    EUTest(False, "shmem", 100, 1,
+        """\
+uint32_t vop1 = 0;
+__shared__ uint32_t shm[2];
+if (result == nullptr) { // ensure shm usage
+#pragma unroll 1
+    for (int i=0; i<2; i++) shm[i] = (uint32_t)clock();
+#pragma unroll 1
+    for (int i=0; i<2; i++) asm volatile("v_mov_b32 v0, %0\\n"::"r"(shm[i]));
+}
+shm[0] = 0;
+""",
+        lambda i: "asm volatile(\"ds_read_b32 %0, %0\\n\":\"+v\"(vop1));\n" +
+                "asm volatile(\"s_waitcnt lgkmcnt(0)\\n\");\n",
+        lambda n: "", 0, 0),
+    
+    EUTest(False, "gmem", 100, 1,
+        "uint64_t vop1 = (uint64_t)result;\n" +
+        "*result = vop1;\n",
+        lambda i: "asm volatile(\"flat_load_dwordx2 %0, %0\\n\":\"+v\"(vop1));\n" +
+                "asm volatile(\"s_waitcnt lgkmcnt(0)\\n\");\n",
         lambda n: "", 0, 0),
 
 ]

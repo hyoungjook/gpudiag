@@ -5,11 +5,11 @@ from define import Test
 # True: Run the test / False: Skip the test
 run_test = {
     Test.kernel_limits:     False,
-    Test.verify_limits:     False,
     Test.l1i_linesize:      False,
     Test.icache_hierarchy:  False,
     Test.mp_and_buffers:    False,
     Test.functional_units:  False,
+    Test.dcache_hierarchy:  False,
 }
 
 # Test configuration value definition
@@ -30,11 +30,11 @@ class CKPT(Enum):
 values = {
     ## The test result related to the shared memory will have the accuracy of
     ## following granularity. Smaller value = more accurate = more time-consuming.
-    ### USED IN: verify_limits, mp_and_buffers
+    ### USED IN: kernel_limits, mp_and_buffers
     CKPT.shared_memory_test_granularity: 1024,
     ## The test result related to the register file will have the accuracy of
     ## following granularity. Smaller value = more accurate = more time-consuming.
-    ### USED IN: verify_limits, mp_and_buffers
+    ### USED IN: kernel_limits, mp_and_buffers
     CKPT.register_test_granularity: 64,
 
     ## The icache hierarchy will be investigated up to the following size (KiB).

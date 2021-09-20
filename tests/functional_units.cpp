@@ -8,7 +8,7 @@
 #define ckpt_eu_latency_repeats
 
 #include "tool.h"
-#include "exec_units.h"
+#include "functional_units.h"
 
 void do_test(int test_idx, const char *name) {
     uint64_t htime, *dtime;
@@ -20,7 +20,7 @@ void do_test(int test_idx, const char *name) {
     hipStreamSynchronize(0);
     hipMemcpy(&htime, dtime, sizeof(uint64_t), hipMemcpyDeviceToHost);
     float period = (float)(htime - 1) / (ckpt_eu_latency_repeats - 1);
-    char buf[50];
+    char buf[100];
     sprintf(buf, "# %d. %s op. results", test_idx+1, name);
     write_line(buf);
     sprintf(buf, "# Period P = %.3f", period);
@@ -47,12 +47,12 @@ void do_test(int test_idx, const char *name) {
             float inv_slope = (float)(c+1) / T_at_c[c];
             n_bot = n_bot>inv_slope?n_bot:inv_slope;
         }
-        float bottleneck_thruput = n_bot / latency;
-        sprintf(buf, "f(c) of %s op.", name);
+        float bottleneck_thruput = n_bot / period;
+        sprintf(buf, "fu(c) of %s op.", name);
         char buf2[50];
         sprintf(buf2, "n_bot=%.3f", n_bot);
         write_graph_data_with_line(
-            buf, iter_num, "c", 1, 1, "f", T_at_c, 1.0f/n_bot, 0, buf2);
+            buf, iter_num, "c", 1, 1, "fu(c)", T_at_c, 1.0f/n_bot, 0, buf2);
         sprintf(buf, "# n_bot = %.3f", n_bot);
         write_line(buf);
         sprintf(buf, "# bottleneck throughput = %.3f [simd insts/cyc/mp]",

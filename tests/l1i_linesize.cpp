@@ -1,7 +1,7 @@
 // MANUFACTURER=1 (nvidia), =0 (amd)
 #define MANUFACTURER
 #define REPORT_DIR
-#define limit_registers_per_thread(i)
+#define limit_registers_per_thread
 
 #include "tool.h"
 #include "l1i_linesize.h"

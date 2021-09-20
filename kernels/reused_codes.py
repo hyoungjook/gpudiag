@@ -47,7 +47,7 @@ def compile_and_check_resource(proj_path, in_file, out_file):
 def run_succeed(obj_dir, obj_name):
     obj_file = os.path.join(obj_dir, obj_name)
     if conf.simulator_driven:
-        copied_bin_dir = os.path.join(conf.simulator_path, "gpudiag/", "verify_limits")
+        copied_bin_dir = os.path.join(conf.simulator_path, "gpudiag/", "kernel_limits")
         cmd = "mkdir -p " + copied_bin_dir
         cmd += " && cp " + obj_file + " " + copied_bin_dir
         print_and_exec(cmd)
@@ -95,59 +95,4 @@ __global__ void measure_width_{}(uint64_t *result) {{
     if (hipThreadIdx_x == 0) *result = eclk - sclk;
 }}
 """.format(repeat_for-1, repeat_for+1)
-    return code
-
-def measure_regfile_code(kernel_name, reg_val, manufacturer, is_sreg):
-    code = """\
-__global__ void {}(uint32_t *sync, uint32_t G,
-        uint64_t timeout, uint32_t *is_timeout, uint64_t *totalclk) {{
-    uint64_t sclk, eclk, toclk;
-    bool thread0 = (hipThreadIdx_x == 0);
-    bool chktime = (timeout != 0);
-    volatile uint32_t *chksync = sync;
-    __syncthreads();
-    sclk = clock();
-    toclk = sclk + timeout;
-    if (thread0) atomicAdd(sync, 1);
-    while(*chksync < G) {{
-        if (chktime && clock() > toclk) {{
-            *is_timeout = 1; return;
-        }}
-    }}
-    eclk = clock();
-    if (thread0) totalclk[hipBlockIdx_x] = eclk - sclk;
-    // ensure reg usage
-    if (G > 0) return; // do not execute, just compile
-""".format(kernel_name)
-    if manufacturer == "nvidia":
-        code += """\
-    asm volatile(".reg .b32 tr<{}>;\\n");
-    asm volatile(".reg .b64 addr;\\n");
-    asm volatile("mov.u64 addr, %0;\\n"::"l"(sync));
-    asm volatile(
-""".format(reg_val)
-        for i in range(reg_val):
-            code += "\"mov.u32 tr{}, %clock;\\n\"\n".format(i)
-        code += "\t);\n__syncthreads();\n\tasm volatile(\n"
-        for i in range(reg_val):
-            code += "\"st.global.u32 [addr+{}], tr{};\\n\"\n".format(4*i, i)
-        code += "\t);\n}\n"
-    else:
-        if is_sreg:
-            code += """\
-    uint32_t sdummy[{}];
-#pragma unroll {}
-    for(int i=0;i<{};i++) asm volatile("s_mov_b32 %0, 0\\n":"=s"(sdummy[i]));
-#pragma unroll {}
-    for(int i=0;i<{};i++) asm volatile("s_mov_b32 s0, %0\\n"::"s"(sdummy[i]));
-""".format(reg_val, reg_val, reg_val, reg_val, reg_val)
-        else:
-            code += """\
-    uint32_t vdummy[{}];
-#pragma unroll {}
-    for(int i=0;i<{};i++) asm volatile("v_mov_b32 %0, 0\\n":"=v"(vdummy[i]));
-#pragma unroll {}
-    for(int i=0;i<{};i++) asm volatile("v_mov_b32 v0, %0\\n"::"v"(vdummy[i]));
-""".format(reg_val, reg_val, reg_val, reg_val, reg_val)
-        code += "};\n"
     return code
