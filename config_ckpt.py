@@ -5,18 +5,19 @@ from define import Test
 # True: Run the test / False: Skip the test
 run_test = {
     Test.kernel_limits:     False,
-    Test.l1i_linesize:      False,
-    Test.icache_hierarchy:  False,
-    Test.mp_and_buffers:    False,
-    Test.functional_units:  False,
+    Test.icache_hierarchy:  True,
     Test.dcache_hierarchy:  False,
+    Test.functional_units:  False,
+    Test.mp_and_buffers:    False,
 }
 
 # Test configuration value definition
 class CKPT(Enum):
     shared_memory_test_granularity = auto()
     register_test_granularity = auto()
-    max_icache_investigate_size_KiB = auto()
+    max_icache_investigate_repeats = auto()
+    icache_investigate_interval = auto()
+    max_dcache_investigate_repeats = auto()
     nslot_timeout_multiplier = auto()
     mab_skip_num_mp_and_use = auto()
     mab_skip_wsb_and_use_n1 = auto()
@@ -37,17 +38,24 @@ values = {
     ### USED IN: kernel_limits, mp_and_buffers
     CKPT.register_test_granularity: 64,
 
-    ## The icache hierarchy will be investigated up to the following size (KiB).
-    ## For gpgpusim with lengauer-tarjan algorithm, 128 is recommended.
-    ## Larger value = more hierarchy revealed = more time-consuming.
+    ## The icache hierarchy will be investigated up to the following.
+    ## Max size investigated: ptx(x8B), nvidia(x16B?), amd(x12B)
+    ## interval: only investigate every (interval) repeats
     ### USED IN: icache_hierarchy
-    CKPT.max_icache_investigate_size_KiB: 128,
+    CKPT.max_icache_investigate_repeats: 4096,
+    CKPT.icache_investigate_interval: 256,
+
+    ## The dcache hierarchy will be investigated up to the following.
+    ## Max size investigated: (x(4 * L1D$ linesize) Bytes)
+    ## If limit_sharedmem_per_block/8 is less then below, that value will be used.
+    ### USED IN: dcache_hierarchy
+    CKPT.max_dcache_investigate_repeats: 1024,
 
     ## Tests will determine deadlock if the sync consumes more time than
     ## (previously detected max time consumption) * (this multiplier).
     ## For simulations, 10 is enough.
     ### USED IN: mp_and_buffers
-    CKPT.nslot_timeout_multiplier: 10,
+    CKPT.nslot_timeout_multiplier: 5,
 
     ## mp_and_buffers runs multiple tests:
     ## (1) num_mp / (2) barrier_buffer_size & warp_state_buffer_size /
@@ -55,12 +63,12 @@ values = {
     ## If you want to skip some test, provide the result by number.
     ## Test is run if the value <= 0.
     ### USED IN: mp_and_buffers
-    CKPT.mab_skip_num_mp_and_use:   0, # if >0, skip (1) and use num_mp with this value
-    CKPT.mab_skip_wsb_and_use_n1:   0, # if >0, skip (2) and use N1 with this value
-    CKPT.mab_skip_wsb_and_use_n2:   0, # if >0, skip (2) and use N2 with this value
-    CKPT.mab_skip_wsb_and_use_nat1: 0, # if >0, skip (2) and use Nslot,n1n2(b=1)
+    CKPT.mab_skip_num_mp_and_use:   4, # if >0, skip (1) and use num_mp with this value
+    CKPT.mab_skip_wsb_and_use_n1:   4, # if >0, skip (2) and use N1 with this value
+    CKPT.mab_skip_wsb_and_use_n2:   40, # if >0, skip (2) and use N2 with this value
+    CKPT.mab_skip_wsb_and_use_nat1: 40, # if >0, skip (2) and use Nslot,n1n2(b=1)
         # (2) is skipped only if all wsb_* values are >0!
-    CKPT.mab_skip_shmem:            0, # if >0, skip (3) (nothing will use this value)
+    CKPT.mab_skip_shmem:            1, # if >0, skip (3) (nothing will use this value)
     CKPT.mab_skip_regfile:          0, # if >0, skip (4) (nothing will use this value)
 
     ## num of instruction repeats when measuring the latency

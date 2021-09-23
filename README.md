@@ -24,9 +24,6 @@ You should prepare gpgpusim-compatible environment first.
 The Dockerfile at dockerfiles/gpgpusim is tested.
 
 The following modifications should be applied to the gpgpusim.
-- Because gpgpusim 4.0.1 uses a naive algorithm in finding dominators,
-icache_hierarchy test is too slow. Please modify it using
-lengauer_tarjan_dominator_tree in boost.org
 - NOTE: the default config uses modified gpgpusim.config at 
 configs/tested-cfgs/SM75_RTX2060_notperfect, which was 
 modified as non-perfect icache, 4 SMs, and 8KiB L1I$.

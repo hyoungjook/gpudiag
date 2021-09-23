@@ -1,126 +1,87 @@
 // MANUFACTURER=1 (nvidia), =0 (amd)
 #define MANUFACTURER
 #define REPORT_DIR
-#define l1i_linesize
 
-#define ckpt_max_icache_investigate_size_KiB
+#define ckpt_max_icache_investigate_repeats
+#define ckpt_icache_investigate_interval
 
 #include "tool.h"
 #include "icache_hierarchy.h"
 
-const int max_KiB = ckpt_max_icache_investigate_size_KiB;
-
 int main(int argc, char **argv) {
     CHECK(hipSetDevice(0));
 
-    const uint64_t num_blocks = max_KiB * 1024 / l1i_linesize;
-    const int max_level = 10;
+    const int num_iters = ckpt_max_icache_investigate_repeats /
+        ckpt_icache_investigate_interval;
+    float data[num_iters];
 
-    uint64_t hres[num_blocks];
-    uint64_t *dres;
-    const size_t arrsize = num_blocks * sizeof(uint64_t);
-    hipMalloc(&dres, arrsize);
-    for (int i=0; i<num_blocks; i++) hres[i] = 0;
-    hipMemcpy(dres, hres, arrsize, hipMemcpyHostToDevice);
-
-    hipLaunchKernelP(measure_icache, dim3(1), dim3(1), 0, 0, dres);
-    hipDeviceSynchronize();
-    hipMemcpy(hres, dres, arrsize, hipMemcpyDeviceToHost);
-
-    for (int i=0; i<num_blocks-1; i++) {
-        hres[i] = hres[i+1] - hres[i];
+    uint64_t hres, *dres;
+    hipMalloc(&dres, sizeof(uint64_t));
+    for (int i=0; i<num_iters; i++) {
+        hipLaunchKernelP(measure_icache[i], dim3(1), dim3(1), 0, 0, dres);
+        hipStreamSynchronize(0);
+        hipMemcpy(&hres, dres, sizeof(uint64_t), hipMemcpyDeviceToHost);
+        data[i] = (float)hres / (float)((i+1)*ckpt_icache_investigate_interval);
     }
+    hipFree(dres);
 
-    // use the result to extract the icache data
-    int level_n_hit[num_blocks-1];
-    uint64_t level_n_hit_latency[max_level];
-    for (int i=0; i<max_level; i++) level_n_hit_latency[i] = 0;
-    level_n_hit_latency[0] = (hres[0] + hres[1]) / 2;
+    // analyze
+    int max_level = 20;
+    uint64_t capacity[max_level];
     int current_level = 0;
-    uint64_t level_n_first_occurrence[max_level];
-
-    // label each data
-    for (uint64_t i=0; i<num_blocks-1; i++) {
-        if (hres[i] > 1.5*level_n_hit_latency[current_level]) {
-            // new hierarchy discovered!
+    float current_level_time = data[0];
+    float current_level_mean_slope = data[1] - data[0];
+    for (int i=1; i<num_iters; i++) {
+        if (current_level_time < 0) {
+            // waiting the slope to be flat again..
+            if (data[i] - data[i-1] < 1.5 * current_level_mean_slope) {
+                // flat again!
+                current_level_time = data[i];
+                current_level_mean_slope = data[i] - data[i-1];
+                continue;
+            }
+        } 
+        if (data[i] > 1.5 * current_level_time) {
+            // new hierarchy detected
             current_level++;
-            level_n_hit[i] = current_level;
-            level_n_hit_latency[current_level] = hres[i];
-            level_n_first_occurrence[current_level] = i;
+            capacity[current_level-1] = ICACHE_INSTSIZE_A +
+                ICACHE_INSTSIZE_B * ckpt_icache_investigate_interval * i-1;
+            current_level_time = -1;
             continue;
         }
-
-        // determine which level hit the data is
-        float lat = (float)hres[i];
-        float min_err = lat / (float)level_n_hit_latency[0] + 2;
-        int level_of_min_error = 0;
-        for (int l=0; l<=current_level; l++) {
-            float lat_n = (float)level_n_hit_latency[l];
-            float err = lat / lat_n;
-            err = err<1 ? 1-err : err-1;
-            if (err < min_err) {
-                min_err = err; level_of_min_error = l;
-            }
-        }
-        level_n_hit[i] = level_of_min_error;
+        current_level_time = (current_level_time + data[i]) / 2.0f;
+        current_level_mean_slope = (current_level_mean_slope + data[i]-data[i-1]) / 2.0f;
     }
     int max_observed_level = current_level;
-
-    // calc capacity
-    uint64_t level_n_capacity[max_level];
-    for (int l=0; l<=max_observed_level-1; l++) {
-        level_n_capacity[l] = (level_n_first_occurrence[l+1]+1) * l1i_linesize;
+    for (int i=0; i<max_observed_level; i++) {
+        // round the value to the nearest multiple of 1024
+        capacity[i] = (capacity[i] + 512) / 1024 * 1024;
     }
-
-    // calc linesize
-    uint32_t level_n_linesize[max_level];
-    level_n_linesize[0] = l1i_linesize;
-    bool found_max_observed_levels_linesize = true;
-    for (int l=1; l<=max_observed_level; l++) {
-        uint64_t idx = level_n_first_occurrence[l] + 1;
-        while(level_n_hit[idx] != l) {
-            idx++;
-            if (idx > num_blocks-2) {
-                found_max_observed_levels_linesize = false;
-                break;
+    uint64_t capacity_removed_redunduncy[max_level];
+    capacity_removed_redunduncy[0] = capacity[0]; current_level = 0;
+    if (max_observed_level > 0) {
+        for (int i=1; i<max_observed_level; i++) {
+            if (capacity[i] > capacity_removed_redunduncy[current_level]) {
+                capacity_removed_redunduncy[current_level+1] = capacity[i];
+                current_level++;
             }
         }
-        level_n_linesize[l] = (idx - level_n_first_occurrence[l]) * l1i_linesize;
+        max_observed_level = current_level+1;
     }
 
+    // write
     write_init("icache_hierarchy");
-    write_line("# 1. Raw data");
-    write_graph_data("Icache hierarchy", num_blocks-1, 
-        "inst. size(B)", l1i_linesize, l1i_linesize,
-        "latency", hres);
-
-    write_line("# 2. Which level hit is each data?");
-    char buf[num_blocks * 10 + 50];
-    int bufptr = sprintf(buf, "# ");
-    for (int i=0; i<num_blocks-1; i++) {
-        bufptr += sprintf(buf+bufptr, "%d, ", level_n_hit[i]);
-    }
-    write_line(buf);
-
-    sprintf(buf, "# 3. Observed hierarchy up to %dKiB", max_KiB);
-    write_line(buf);
-    if (max_observed_level > 0) {
-        write_values("icache_capacities", level_n_capacity, max_observed_level);
-    }
+    write_graph_data("Icache hierarchy", num_iters, "inst. size(B)",
+        ICACHE_INSTSIZE_A + ICACHE_INSTSIZE_B * ckpt_icache_investigate_interval,
+        ICACHE_INSTSIZE_B * ckpt_icache_investigate_interval,
+        "total time / repeat", data);
+    if (max_observed_level > 0)
+        write_values("icache_capacities", capacity, max_observed_level);
     else {
-        write_line("# only 1 level is observed.");
-        write_line("# L1I capacity is at least following.");
-        write_value("icache_capacities", max_KiB * 1024);
+        write_line("## Only 1 level is observed, L1I capacity is at least following.");
+        write_value("icache_capacities", ICACHE_INSTSIZE_A + num_iters * 
+            ckpt_icache_investigate_interval * ICACHE_INSTSIZE_B);
     }
-    if (found_max_observed_levels_linesize) {
-        write_values("icache_linesizes", level_n_linesize, max_observed_level+1);
-    }
-    else {
-        write_values("icache_linesizes", level_n_linesize, max_observed_level);
-    }
-    
-
-    hipFree(dres);
 
     return 0;
 }

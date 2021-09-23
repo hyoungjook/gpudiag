@@ -53,9 +53,8 @@ int main(int argc, char **argv) {
     }
 
     // == Dcache Hierarchy test ===
-    const int num_dcache_repeat = limit_sharedmem_per_block / 8;
-    resarrsize = num_dcache_repeat * sizeof(uint64_t);
-    int testarrsize = num_dcache_repeat * l1d_linesize;
+    resarrsize = NUM_DCACHE_REPEAT * sizeof(uint64_t);
+    int testarrsize = NUM_DCACHE_REPEAT * l1d_linesize;
     hipMalloc(&darr, testarrsize);
     hres = (uint64_t*)malloc(resarrsize);
     hipMalloc(&dres, resarrsize);
@@ -72,7 +71,7 @@ int main(int argc, char **argv) {
     for (int l=1; l<max_level; l++) linesize[l] = 0;
     int linesize_counting = -1;
     
-    for (int i=1; i<num_dcache_repeat; i++) {
+    for (int i=1; i<NUM_DCACHE_REPEAT; i++) {
         float val = (float)hres[i];
         if (val > 1.5 * hit_latency[current_level]) {
             // new hierarchy found
@@ -103,13 +102,13 @@ int main(int argc, char **argv) {
     int num_observed_linesizes = 0;
     for (int l=0; l<max_level; l++) if (linesize[l]>0) num_observed_linesizes++;
     write_line("# 2. Dcache hierarchy test");
-    write_graph_data("Dcache hierarchy", num_dcache_repeat-1,
+    write_graph_data("Dcache hierarchy", NUM_DCACHE_REPEAT-1,
         "data size(B)", 2*l1d_linesize, l1d_linesize, "latency", hres+1);
     if (max_observed_level > 0)
         write_values("dcache_capacities", capacity, max_observed_level);
     else {
         write_line("## Only 1 level is observed, L1D capacity is at least following.");
-        write_value("dcache_capacities", num_dcache_repeat * l1d_linesize);
+        write_value("dcache_capacities", NUM_DCACHE_REPEAT * l1d_linesize);
     }
     write_values("dcache_linesizes", linesize, num_observed_linesizes);
     write_values("dcache_latencies", hit_latency, max_observed_level+1);

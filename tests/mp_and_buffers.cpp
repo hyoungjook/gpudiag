@@ -100,8 +100,8 @@ uint32_t num_mp_test() {
         T_br_at_c[c] = (float)br_times_raw[c] / (float)br_times_raw[0];
     }
     write_line("# 1. Branch op. n_eff raw data");
-    write_graph_data("f(c) of branch op.", iter_num, "c", 1, 1,
-        "measured f", T_br_at_c);
+    write_graph_data("fu(c) of branch op.", iter_num, "c", 1, 1,
+        "fu(c)", T_br_at_c);
 
     // Calculate c_br
     int c_br = -1;

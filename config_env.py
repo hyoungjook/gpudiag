@@ -1,5 +1,5 @@
-config_preset = "gpgpusim"
-##config_preset = "gem5"
+##config_preset = "gpgpusim"
+config_preset = "gem5"
 ##config_preset = "custom"
 
 #============================================================================
@@ -39,7 +39,7 @@ if config_preset == "gpgpusim":
         "-gencode arch=compute_75,code=sm_75 $SRC -o $BIN -Xptxas=-O0"
 elif config_preset == "gem5":
     compile_command = "/opt/rocm/hip/bin/hipcc --amdgpu-target=gfx803 " +\
-        "$SRC -o $BIN -O1"
+        "$SRC -o $BIN"
 else:
     compile_command = ""
 
@@ -59,5 +59,18 @@ elif config_preset == "gem5":
         "-c $DIR/$BIN -n4 --dgpu --gfx-version=gfx803 --reg-alloc-policy=dynamic"
 else:
     run_command = "$DIR/$BIN"
+
+#============================================================================
+
+#============================================================================
+# objdump_command: command to disassemble the device binary.
+#   Use binary $BIN and output $OUT
+if config_preset == "gpgpusim":
+    objdump_command = "cuobjdump -ptx $BIN > $OUT"
+elif config_preset == "gem5":
+    objdump_command = "/opt/rocm/hip/bin/extractkernel -i $BIN && " +\
+        "mv $BIN-*.isa $OUT"
+else:
+    objdump_command = "cuobjdump -sass $BIN > $OUT"
 
 #============================================================================

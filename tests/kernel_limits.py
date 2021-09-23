@@ -319,7 +319,7 @@ def runnable(code, args):
 
 def no_abort_launchable_LRpB_routine():
     return """\
-#define INT_TO_LITERAL(i) #i
+#define INT_TO_LITERAL(i) (i==0?"0":"1")
 uint32_t do_LRpB_test(uint32_t LRpT, uint32_t Reg_unit, uint32_t initLRpB,
         bool (*chkfunc)(uint32_t,uint32_t), const char* title, const char* xlabel,
         uint32_t regmin, int infoidx) {
@@ -646,6 +646,7 @@ def test_limits(proj_path, result_values):
         LRpB_graph += LRpB_data_str + "\n"
         
         reportfile = open(os.path.join(out_dir, "report.txt"), 'w')
+        reportfile.write("## ========== kernel_limits report ==========\n")
         reportfile.write("limit_threads_per_block={}\n".format(verifiedLTpB))
         reportfile.write("limit_threads_per_grid={}\n".format(verifiedLTpG))
         reportfile.write("limit_sharedmem_per_block={}\n".format(verifiedLSpB))

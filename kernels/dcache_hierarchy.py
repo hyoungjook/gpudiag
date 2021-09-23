@@ -67,16 +67,19 @@ __global__ void measure_dcache(uint32_t *arr, int wordperline, uint64_t *result)
         result[i] = result_buf[i];
     }}
 }}
-""".format(max_lines, max_lines, max_lines, max_lines)
+#define NUM_DCACHE_REPEAT {}
+""".format(max_lines, max_lines, max_lines, max_lines, max_lines)
 
 def generate_nvidia(result_values):
     code = dcache_linesize_code(100)
     limit_shm = int(result_values[Feature.limit_sharedmem_per_block][0])
-    code += dcache_hierarchy_code(limit_shm // 8)
+    limit_ckpt = ckpt.values[ckpt.CKPT.max_dcache_investigate_repeats]
+    code += dcache_hierarchy_code(min(limit_shm // 8, limit_ckpt))
     return code
 
 def generate_amd(result_values):
     code = dcache_linesize_code(100)
     limit_shm = int(result_values[Feature.limit_sharedmem_per_block][0])
-    code += dcache_hierarchy_code(limit_shm // 8)
+    limit_ckpt = ckpt.values[ckpt.CKPT.max_dcache_investigate_repeats]
+    code += dcache_hierarchy_code(min(limit_shm // 8, limit_ckpt))
     return code

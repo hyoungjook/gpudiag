@@ -3,11 +3,10 @@ from enum import auto
 
 class Test(Enum):
     kernel_limits = auto()
-    l1i_linesize = auto()
     icache_hierarchy = auto()
-    mp_and_buffers = auto()
-    functional_units = auto()
     dcache_hierarchy = auto()
+    functional_units = auto()
+    mp_and_buffers = auto()
 
 class Feature(Enum):
     warp_size = auto()
@@ -22,9 +21,10 @@ class Feature(Enum):
     LRpB_test_info1 = auto() # [num_tests, min_tested_R, Reg_unit]
     LRpB_test_data1 = auto() # array of max_b at min_tested_R+i*Reg_unit
 
-    l1i_linesize = auto()
     icache_capacities = auto()
-    icache_linesizes = auto()
+    dcache_capacities = auto()
+    dcache_linesizes = auto()
+    dcache_latencies = auto()
 
     num_mp = auto()
     barrier_buffer_size = auto()
@@ -37,7 +37,3 @@ class Feature(Enum):
     scalar_register_file_alloc_unit = auto()
     vector_register_file_size = auto()
     vector_register_file_alloc_unit = auto()
-
-    dcache_capacities = auto()
-    dcache_linesizes = auto()
-    dcache_latencies = auto()

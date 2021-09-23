@@ -195,7 +195,7 @@ def verify_constraint(result_values, proj_path):
 
     # calculate register_file_kernel_code_regmin
     global register_file_kernel_code_regmin
-    if (conf.gpu_manufacturer == "nvidia"):
+    if conf.gpu_manufacturer == "nvidia":
         LRpT = int(result_values[Feature.limit_registers_per_thread][0])
         testR = LRpT // 2
         regmin = calc_regcnt_from_regval_nvidia(
