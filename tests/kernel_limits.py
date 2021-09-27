@@ -1,41 +1,225 @@
-import subprocess
+from .test_template import test_template
+from .define import Test
 import sys, os
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from define import Feature
-import config_env as conf
-import config_ckpt as ckpt
-import kernels.reused_codes as tool
+from env.config_template import config_values
+from env import script_runner, values_delivery
 
-def get_from_deviceprop(out_dir):
-    return """\
-#define MANUFACTURER {}
-#define REPORT_DIR "{}"
-#include "tool.h"
+## ============== Host codes ============== 
+def deviceprop_host_code(manufacturer, prop_report):
+    manu_num = 1 if manufacturer == "nvidia" else 0
+    return f"""\
+#define MANUFACTURER {manu_num}
+#define REPORT_FILE "{prop_report}"
+#include "gpudiag_runtime.h"
 int main(int argc, char **argv) {{
-    CHECK(hipSetDevice(0));
-    hipDeviceProp_t prop;
-    CHECK(hipGetDeviceProperties(&prop, 0));
-    write_init("prop_values");
-    write_value("0", prop.warpSize);
-    write_value("1", prop.maxThreadsPerBlock);
-    write_value("2", prop.maxGridSize[0]);
-    write_value("3", prop.sharedMemPerBlock);
-#if MANUFACTURER == 1
-    write_value("4", 255);
-    write_value("5", prop.regsPerBlock / prop.warpSize);
-#else
-    uint32_t buf[2]; buf[1] = 256;
-    if (prop.gcnArch < 1000) buf[0] = 102;
-    else buf[0] = 106;
-    write_values("4", buf, 2);
-    buf[0] = buf[1] = prop.regsPerBlock / prop.warpSize;
-    write_values("5", buf, 2);
-#endif
+    GDInit();
+    write_deviceprops();
     return 0;
-}}\n""".format(1 if conf.gpu_manufacturer=="nvidia" else 0, out_dir+"/prop_")
+}}\n"""
 
-def parse_prop_report(report_file):
-    report = open(report_file, 'r')
+def include(minimum):
+    code = ""
+    if minimum:
+        code += "#define MINIMUM_FOR_COMPILE_TESTS\n"
+    code += "#include \"gpudiag_runtime.h\"\n"
+    return code
+
+def compilable_host_code(kernel_name):
+    return f"""\
+int main(int argc, char **argv) {{
+    GDLaunchKernel({kernel_name}, dim3(1), dim3(1), 0, 0, nullptr, true);
+    return 0;
+}}\n"""
+
+def launchable_abortable_host_code(kernel_name, G, B):
+    return f"""\
+int main(int argc, char **argv) {{
+    GDInit();
+    uint8_t hv = 0, *dv; GDMalloc(&dv, sizeof(uint8_t));
+    GDMemcpyHToD(dv, &hv, sizeof(uint8_t));
+    GDLaunchKernel({kernel_name}, dim3({G}), dim3({B}), 0, 0, dv, true);
+    if (!GDIsLastErrorSuccess()) {{GDFree(dv); return 1;}}
+    GDSynchronize();
+    GDMemcpyDToH(&hv, dv, sizeof(uint8_t));
+    GDFree(dv);
+    if (hv != 1) return 1;
+    return 0;
+}}\n"""
+
+def launchable_noabort_host_code(func_name, kernel_name, is_func_array):
+    arg_list = "int G, int B"
+    kernel_format = kernel_name
+    if is_func_array:
+        arg_list += ", int idx"
+        kernel_format += "[idx]"
+    return f"""\
+bool {func_name}({arg_list}){{
+    GDInit();
+    uint8_t hv = 0, *dv; GDMalloc(&dv, sizeof(uint8_t));
+    GDMemcpyHToD(dv, &hv, sizeof(uint8_t));
+    GDLaunchKernel({kernel_format}, dim3(G), dim3(B), 0, 0, dv, true);
+    if (!GDIsLastErrorSuccess()) {{GDFree(dv); return false;}}
+    GDSynchronize();
+    GDMemcpyDToH(&hv, dv, sizeof(uint8_t));
+    GDFree(dv);
+    if (hv != 1) return false;
+    return true;
+}}\n"""
+
+def deliver_value_code(var_name, value):
+    return f"#define {var_name} {value}\n"
+
+## ============== Kernel codes ============== 
+def return_if_real():
+    return """\
+    if (real) {
+        if (GDThreadIdx == 0 && GDBlockIdx == 0) *r = 1;
+        return;
+    }\n"""
+
+def normal_kernel(kernel_name):
+    return f"""\
+__global__ void {kernel_name}(uint8_t *r, bool real) {{
+    {return_if_real()}
+}}
+"""
+
+def shmem_kernel(kernel_name, shmem_size):
+    return f"""\
+__global__ void {kernel_name}(uint8_t *r, bool real) {{
+    {return_if_real()}
+    __shared__ uint8_t arr[{shmem_size}];
+    for (int i=0; i<{shmem_size}; i++) arr[i] = (uint8_t)clock();
+    for (int i=0; i<{shmem_size}; i++) r[i] = arr[i];
+}}\n"""
+
+def reg_kernel(kernel_name, manufacturer, reg_val, reg_type):
+    code = f"""\
+__global__ void {kernel_name}(uint8_t *r, bool real) {{
+    {return_if_real()}
+"""
+    if manufacturer == "nvidia":
+        code += f"""\
+    asm volatile(".reg .b32 tr<{reg_val}>;\\n");
+    asm volatile(".reg .b64 addr;\\n");
+    asm volatile("mov.u64 addr, %0;\\n"::"l"(r));
+    asm volatile(
+"""
+        for i in range(reg_val):
+            code += f"\"mov.u32 tr{i}, %clock;\\n\"\n"
+        code += "\t);\n__syncthreads();\n\tasm volatile(\n"
+        for i in range(reg_val):
+            code += f"\"st.global.u32 [addr+{4*i}], tr{i};\\n\"\n"
+        code += "\t);\n}\n"
+        return code
+    else: # "amd":
+        typech = 's' if reg_type==0 else 'v'
+        code += f"""\
+    asm volatile("{typech}_mov_b32 {typech}{reg_val-1}, 0\\n");
+    uint32_t dummy[{reg_val}];
+#pragma unroll {reg_val}
+    for (int i=0; i<{reg_val}; i++)
+        asm volatile("{typech}_mov_b32 %0, 0\\n":"={typech}"(dummy[i]));
+#pragma unroll {reg_val}
+    for (int i=0; i<{reg_val}; i++)
+        asm volatile("{typech}_mov_b32 {typech}0, %0\\n"::"{typech}"(dummy[i]));
+}}\n"""
+        return code
+
+def reg_kernel_nvidia_real_usage(kernel_name, actual_reg, regmin):
+    if actual_reg <= regmin:
+        return normal_kernel(kernel_name)
+    return reg_kernel(kernel_name, "nvidia", actual_reg-regmin, 0)
+
+def make_kernel_array(array_name, N, x0, dx):
+    code = f"void (*{array_name}[{N}])(uint8_t *, bool) = {{\n"
+    for i in range(N):
+        code += f"{array_name}_{x0 - i * dx},\n"
+    code += "};\n"
+    return code
+
+def launchable_noabort_reg_kernel_set(compilableLRpT, Reg_unit, regmin, prefix,
+        manufacturer, reg_type):
+    # generate kernels, testR = Reg_unit * m and compilableLRpT if not included.
+    # testR should also be > regmin+16 for safety..
+    code = ""
+    min_testR = ((regmin+16)//Reg_unit + 1) * Reg_unit
+    num_tests = (compilableLRpT - min_testR) // Reg_unit + 1
+    num_lrpt_tests = num_tests if (compilableLRpT%Reg_unit==0) else num_tests+1
+    for i in range(num_lrpt_tests):
+        testR = min_testR + i * Reg_unit
+        if i == num_tests:
+            testR = compilableLRpT
+        if manufacturer == "nvidia":
+            code += reg_kernel_nvidia_real_usage(f"{prefix}_{testR}", testR, regmin)
+        else: # "amd":
+            code += reg_kernel(f"{prefix}_{testR}", "amd", testR, reg_type)
+    # generate kernel array
+    code += f"void (*{prefix}_LRpT[{num_lrpt_tests}])(uint8_t*,bool) = {{\n"
+    if num_lrpt_tests > num_tests:
+        code += f"{prefix}_{compilableLRpT},\n"
+    for i in range(num_tests):
+        code += f"{prefix}_{min_testR + (num_tests-i-1) * Reg_unit},\n"
+    code += "};\n"
+    code += f"void (*{prefix}_LRpB[{num_tests}])(uint8_t*,bool) = {{\n"
+    for i in range(num_tests):
+        code += f"{prefix}_{min_testR + i * Reg_unit},\n"
+    code += "};\n"
+    return code
+
+## ============== Checkfuncs for getmax ============== 
+def checkfunc_LSpB_compilable(val, instance):
+    return instance.compilable(
+        include(minimum=True) + shmem_kernel("test", val) +
+        compilable_host_code("test"))
+def checkfunc_LRpT_compilable_nvidia(val, instance):
+    script_runner.create_file(
+        include(minimum=True) + reg_kernel("test", "nvidia", val, 0) +
+        compilable_host_code("test"), instance.tmpsrc)
+    regcnts = script_runner.compile_and_check_resource(
+        instance.conf, instance.tmpsrc, instance.tmpobj, [instance.src_dir])
+    if regcnts[0] == 0: # no spill regs
+        return True
+    return val <= regcnts[1] # reg spill occurred
+def checkfunc_LRpT_compilable_amd_sreg(val, instance):
+    return instance.compilable(
+        include(minimum=True) + reg_kernel("test", "amd", val, 0) +
+        compilable_host_code("test"))
+def checkfunc_LRpT_compilable_amd_vreg(val, instance):
+    return instance.compilable(
+        include(minimum=True) + reg_kernel("test", "amd", val, 1) +
+        compilable_host_code("test"))
+
+def checkfunc_LTpB_launchable_abort(val, instance):
+    return instance.runnable(
+        include(minimum=False) + normal_kernel("test") +
+        launchable_abortable_host_code("test", 1, val))
+def checkfunc_LTpG_launchable_abort(val, instance):
+    return instance.runnable(
+        include(minimum=False) + normal_kernel("test") +
+        launchable_abortable_host_code("test", val, 1))
+def checkfunc_LSpB_launchable_abort(val, instance):
+    return instance.runnable(
+        include(minimum=False) + shmem_kernel("test", val) +
+        launchable_abortable_host_code("test", 1, 1))
+def checkfunc_LRpT_launchable_abort_nvidia(val, instance):
+    return instance.runnable(
+        include(minimum=False) +
+        reg_kernel_nvidia_real_usage("test", val, instance.regmin) +
+        launchable_abortable_host_code("test", 1, 1))
+def checkfunc_LRpB_launchable_abort_nvidia(val, args):
+    (instance, testR) = args
+    if val * instance.warpSize > instance.verifiedLTpB:
+        return False # cannot launch over LTpB
+    return instance.runnable(
+        include(minimum=False) +
+        reg_kernel_nvidia_real_usage("test", testR, instance.regmin) +
+        launchable_abortable_host_code("test", 1, val * instance.warpSize))
+
+## ============== Tool functions ============== 
+def parse_prop_report(prop_report_file):
+    report = open(prop_report_file, 'r')
     ret = ["", "", "", "", "", ""]
     for l in report.readlines():
         if l[0] != '#':
@@ -45,153 +229,10 @@ def parse_prop_report(report_file):
         ret4 = [int(ret[4].split(',')[0]), int(ret[4].split(',')[1])]
         ret5 = [int(ret[5].split(',')[0]), int(ret[5].split(',')[1])]
     else:
-        ret4 = int(ret[4])
-        ret5 = int(ret[5])
+        ret4 = [int(ret[4])]
+        ret5 = [int(ret[5])]
     return (int(ret[0]), int(ret[1]), int(ret[2]), int(ret[3]), ret4, ret5)
 
-def include():
-    return """\
-#include "hip/hip_runtime.h"
-#include <stdint.h>
-"""
-
-def return_if_real():
-    return """\
-if (real) {
-    if (hipThreadIdx_x == 0 && hipBlockIdx_x == 0) *r = 1;
-    return;
-}\n"""
-
-def normal_kernel(kernel_name):
-    return """\
-__global__ void {}(uint8_t *r, bool real) {{
-    {}
-}}
-""".format(kernel_name, return_if_real())
-
-def shmem_kernel(kernel_name, shmem_size):
-    return """\
-__global__ void {}(uint8_t *r, bool real) {{
-    {}
-    __shared__ uint8_t arr[{}];
-    for (int i=0; i<{}; i++) arr[i] = (uint8_t)clock();
-    for (int i=0; i<{}; i++) r[i] = arr[i];
-}}\n""".format(kernel_name, return_if_real(), shmem_size, shmem_size, shmem_size)
-
-def reg_kernel_nvidia(kernel_name, reg_est):
-    # ensures more reg than provided; must be checked with res-usage
-    code = """\
-__global__ void {}(uint8_t *r, bool real){{
-    {}
-    asm volatile(".reg .b32 tr<{}>;\\n");
-    asm volatile(".reg .b64 addr;\\n");
-    asm volatile("mov.u64 addr, %0;\\n"::"l"(r));
-    asm volatile(
-""".format(kernel_name, return_if_real(), reg_est)
-    for i in range(reg_est):
-        code += "\"mov.u32 tr{}, %clock;\\n\"\n".format(i)
-    code += "\t);\n__syncthreads();\n\tasm volatile(\n"
-    for i in range(reg_est):
-        code += "\"st.global.u32 [addr+{}], tr{};\\n\"\n"\
-            .format(4*i, i)
-    code += "\t);\n}\n"
-    return code
-
-def find_regmin_nvidia(compilableLRpT, args):
-    # (reg_est for reg_kernel_nvidia) = actual_reg_usage + regmin!
-    for i in range(compilableLRpT):
-        testR = compilableLRpT - i
-        tool.write_code(include() + reg_kernel_nvidia("test", testR) +\
-                main_check_compilable("test"), args[2])
-        regcnts = tool.compile_and_check_resource(args[0], args[2], args[3])
-        if regcnts[0] == 0:
-            return compilableLRpT - testR
-
-def reg_kernel_nvidia_real_usage(kernel_name, actual_reg, regmin):
-    # regmin should be found by find_regmin_nvidia
-    if actual_reg <= regmin:
-        return normal_kernel(kernel_name) # normal kernel for such small regs!
-    return reg_kernel_nvidia(kernel_name, actual_reg - regmin)
-
-def reg_kernel_amd(kernel_name, sregs, vregs):
-    code = """\
-__global__ void {}(uint8_t *r, bool real){{
-    {}\n""".format(kernel_name, return_if_real())
-    # ensure 'n_reg'-th reg as operand is compilable
-    if sregs > 0:
-        code += "\tasm volatile(\"s_mov_b32 s{}, 0\\n\");\n".format(sregs-1)
-    if vregs > 0:
-        code += "\tasm volatile(\"v_mov_b32 v{}, 0\\n\");\n".format(vregs-1)
-    # ensure 'n_reg' registers are actually used
-    if sregs > 0:
-        code += """\
-    uint32_t sdummy[{}];
-#pragma unroll {}
-    for(int i=0;i<{};i++) asm volatile("s_mov_b32 %0, 0\\n":"=s"(sdummy[i]));
-#pragma unroll {}
-    for(int i=0;i<{};i++) asm volatile("s_mov_b32 s0, %0\\n"::"s"(sdummy[i]));
-""".format(sregs, sregs, sregs, sregs, sregs)
-    if vregs > 0:
-        code += """\
-    uint32_t vdummy[{}];
-#pragma unroll {}
-    for(int i=0;i<{};i++) asm volatile("v_mov_b32 %0, 0\\n":"=v"(vdummy[i]));
-#pragma unroll {}
-    for(int i=0;i<{};i++) asm volatile("v_mov_b32 v0, %0\\n"::"v"(vdummy[i]));
-""".format(vregs, vregs, vregs, vregs, vregs)
-    code += "}\n"
-    return code
-
-def make_kernel_array(array_name, N, x0, dx):
-    code = "void (*{}[{}])(uint8_t *, bool) = {{\n".format(array_name, N)
-    for i in range(N):
-        code += "{}_{},\n".format(array_name, x0 - i * dx)
-    code += "};\n"
-    return code
-
-def main_check_compilable(kernel_name):
-    return """\
-int main(int argc, char **argv) {{
-    uint8_t hi;
-    hipLaunchKernelGGL({}, dim3(1), dim3(1), 0, 0, &hi, true);
-    return 0;
-}}
-""".format(kernel_name)
-
-def abort_main_check_launchable(kernel_name, G, B):
-    return """\
-int main(int argc, char **argv) {{
-    uint8_t hv = 0, *dv; hipMalloc(&dv, sizeof(uint8_t));
-    hipMemcpy(dv, &hv, sizeof(uint8_t), hipMemcpyHostToDevice);
-    hipLaunchKernelGGL({}, dim3({}), dim3({}), 0, 0, dv, true);
-    if (hipGetLastError() != hipSuccess) {{hipFree(dv); return 1;}}
-    hipStreamSynchronize(0);
-    hipMemcpy(&hv, dv, sizeof(uint8_t), hipMemcpyDeviceToHost);
-    hipFree(dv);
-    if (hv != 1) return 1;
-    return 0;
-}}\n""".format(kernel_name, G, B)
-
-def no_abort_host_check_launchable(func_name, kernel_name, is_func_array):
-    arg_list = "int G, int B"
-    kernel_format = kernel_name
-    if is_func_array:
-        arg_list += ", int idx"
-        kernel_format += "[idx]"
-    return """\
-bool {}({}){{
-    uint8_t hv = 0, *dv; hipMalloc(&dv, sizeof(uint8_t));
-    hipMemcpy(dv, &hv, sizeof(uint8_t), hipMemcpyHostToDevice);
-    hipLaunchKernelP({}, dim3(G), dim3(B), 0, 0, dv, true);
-    if (hipGetLastError() != hipSuccess) {{hipFree(dv); return false;}}
-    hipStreamSynchronize(0);
-    hipMemcpy(&hv, dv, sizeof(uint8_t), hipMemcpyDeviceToHost);
-    hipFree(dv);
-    if (hv != 1) return false;
-    return true;
-}}\n""".format(func_name, arg_list, kernel_format)
-
-## check functions
 def get_max_true(checkfunc, args, initial_value):
     # checkfunc(val: int, args) = True or False
     # True for val<="max_true", False for val>"max_true"
@@ -237,437 +278,212 @@ def get_max_true_given_maxval(checkfunc, args, max_value, update_unit):
         testval -= update_unit
     return testval
 
-def get_max_true_code():
-    return """\
-uint32_t get_max_true(bool (*chkfunc)(uint32_t,uint32_t), uint32_t initval,uint32_t arg) {
-    uint32_t testval = initval, max_true_val, min_false_val;
-    if (chkfunc(testval, arg)) {
-        max_true_val = testval;
-        if (!chkfunc(testval+1, arg)) min_false_val = testval+1;
-        else {
-            while (true) {
-                testval *= 2;
-                if (!chkfunc(testval, arg)) {min_false_val = testval; break;}
-            }
-        }
-    }
-    else {
-        min_false_val = testval;
-        while(true) {
-            testval /= 2;
-            if (chkfunc(testval, arg)) {{max_true_val = testval; break;}}
-        }
-    }
-    while (true) {
-        if (max_true_val+1 == min_false_val) break;
-        uint32_t mid_val = (max_true_val + min_false_val) / 2;
-        if (chkfunc(mid_val, arg)) max_true_val = mid_val;
-        else min_false_val = mid_val;
-    }
-    return max_true_val;
-}\n"""
+class kernel_limits (test_template):
+    test_enum = Test.kernel_limits
 
-def get_min_true_from0_code():
-    return """\
-uint32_t get_min_true_from0(bool (*chkfunc)(uint32_t)) {
-    uint32_t testidx = 0;
-    while (true) {
-        if (chkfunc(testidx)) break;
-        testidx++;
-    }
-    return testidx;
-}\n"""
-
-def compilable(code, args):
-    tool.write_code(code, args[2])
-    return tool.compile_succeed(args[0], args[2], args[3])
-
-def checkfunc_LSpB_compilable(val, args):
-    return compilable(
-        include() +\
-        shmem_kernel("test", val) +\
-        main_check_compilable("test"), args)
-
-def checkfunc_LRpT_compilable_nvidia(val, args):
-    tool.write_code(
-        include() +\
-        reg_kernel_nvidia("test", val) +\
-        main_check_compilable("test"), args[2])
-    regcnts = tool.compile_and_check_resource(args[0], args[2], args[3])
-    if regcnts[0] == 0: # no spill regs
-        return True
-    else: # reg spill occurred
-        return val <= regcnts[1]
-
-def checkfunc_LRpT_compilable_amd_sgpr(val, args):
-    return compilable(
-        include() +\
-        reg_kernel_amd("test", val, 0) +\
-        main_check_compilable("test"), args)
-
-def checkfunc_LRpT_compilable_amd_vgpr(val, args):
-    return compilable(
-        include() +\
-        reg_kernel_amd("test", 0, val) +\
-        main_check_compilable("test"), args)
-
-def runnable(code, args):
-    tool.write_code(code, args[2])
-    if not tool.compile_succeed(args[0], args[2], args[3]):
-        exit(1)
-    return tool.run_succeed(args[1], "tmp_obj")
-
-def no_abort_launchable_LRpB_routine():
-    return """\
-#define INT_TO_LITERAL(i) (i==0?"0":"1")
-uint32_t do_LRpB_test(uint32_t LRpT, uint32_t Reg_unit, uint32_t initLRpB,
-        bool (*chkfunc)(uint32_t,uint32_t), const char* title, const char* xlabel,
-        uint32_t regmin, int infoidx) {
-    uint32_t verifiedLRpB = 0;
-    uint32_t *data = (uint32_t*)malloc((LRpT/Reg_unit)*sizeof(uint32_t));
-    // measure for testR = m * Reg_unit && testR > regmin + 16
-    uint32_t testR = 0, num_tests = 0, min_testR = 0, regkern_idx = 0;
-    while (true) {
-        testR += Reg_unit;
-        if (testR <= regmin + 16) continue;
-        if (testR > LRpT) break;
-        num_tests++; if (min_testR == 0) min_testR = testR;
-        // measure max_b for testR
-        uint32_t max_b = get_max_true(chkfunc, initLRpB/testR, regkern_idx);
-        data[regkern_idx] = max_b; regkern_idx++;
-        verifiedLRpB = verifiedLRpB>max_b*testR?verifiedLRpB:max_b*testR;
-    }
-    write_graph_data(title, num_tests, xlabel, min_testR, Reg_unit,
-        "max B", data);
-    uint32_t test_info[3] = {num_tests, min_testR, Reg_unit};
-    write_values("LRpB_test_info" INT_TO_LITERAL(infoidx), test_info, 3);
-    if (num_tests == 1) {// dummy data, to circumvent compile error in mp_and_buffers
-        data[1] = 0; num_tests++;
-    }
-    write_values("LRpB_test_data" INT_TO_LITERAL(infoidx), data, num_tests);
-    free(data);
-    return verifiedLRpB;
-}\n"""
-
-def no_abort_launchable_Reg_generate_kernels(compilableLRpT, Reg_unit, regmin, prefix,
-        manufacturer, is_sreg):
-    # generate kernels for testR = LRpT & m * Reg_unit && >regmin+16
-    code = ""
-    testR = 0 ; num_tests = 0 ; min_testR = 0 ; num_lrpt_tests = 0
-    while (True):
-        testR += Reg_unit
-        if testR <= regmin + 16:
-            continue
-        if testR > compilableLRpT:
-            break
-        num_tests += 1
-        if min_testR == 0:
-            min_testR = testR
-        if manufacturer == "nvidia":
-            code += reg_kernel_nvidia_real_usage("{}_{}".format(prefix, testR),
-                    testR, regmin)
-        else:
-            if is_sreg:
-                code += reg_kernel_amd("{}_{}".format(prefix, testR),
-                        testR, 0)
-            else:
-                code += reg_kernel_amd("{}_{}".format(prefix, testR),
-                        0, testR)
-    num_lrpt_tests = num_tests
-    if compilableLRpT % Reg_unit != 0:
-        if manufacturer == "nvidia":
-            code += reg_kernel_nvidia_real_usage("{}_{}".format(prefix, compilableLRpT),
-                    compilableLRpT, regmin)
-        else:
-            if is_sreg:
-                code += reg_kernel_amd("{}_{}".format(prefix, compilableLRpT),
-                        compilableLRpT, 0)
-            else:
-                code += reg_kernel_amd("{}_{}".format(prefix, compilableLRpT),
-                        0, compilableLRpT)
-        num_lrpt_tests += 1
-    code += "void (*{}_LRpT[{}])(uint8_t*,bool) = {{\n".format(prefix, num_lrpt_tests)
-    if compilableLRpT % Reg_unit != 0:
-        code += "{}_{},\n".format(prefix, compilableLRpT)
-    for i in range(num_tests):
-        code += "{}_{},\n".format(prefix, min_testR + (num_tests-i-1) * Reg_unit)
-    code += "};\n"
-    code += "void (*{}_LRpB[{}])(uint8_t*,bool) = {{\n".format(prefix, num_tests)
-    for i in range(num_tests):
-        code += "{}_{},\n".format(prefix, min_testR + i * Reg_unit)
-    code += "};\n"
-    return code
-
-def no_abort_launchable_test_code(out_dir, warp_size,\
-        propLTpB, propLTpG, compilableLSpB, compilableLRpT, propLRpB, regmin):
-        # regmin only used for nvidia
-    code = include()
-    code +=  """\
-#include <stdio.h>
-#define REPORT_DIR "{}"
-#define warp_size {}
-#include "tool.h"\n""".format(out_dir + "/", warp_size)
-    code += get_max_true_code() + get_min_true_from0_code()
-    # test thread limits
-    code += normal_kernel("test_thr")
-    code += no_abort_host_check_launchable("chk_thr", "test_thr", False)
-    code += """\
-bool chkfunc_LTpB(uint32_t val, uint32_t arg) {return chk_thr(1, val);}
-bool chkfunc_LTpG(uint32_t val, uint32_t arg) {return chk_thr(val, 1);}
-void do_thr_chk(uint32_t initLTpB, uint32_t initLTpG) {
-    uint32_t verifiedLTpB = get_max_true(chkfunc_LTpB, initLTpB, 0);
-    write_value("limit_threads_per_block", verifiedLTpB);
-    uint32_t verifiedLTpG = initLTpG;
-    //uint32_t verifiedLTpG = get_max_true(chkfunc_LTpG, initLTpG, 0);
-    write_value("limit_threads_per_grid", verifiedLTpG);
-}\n"""
-    # test shmem limits
-    LSpB_test_unit = ckpt.values[ckpt.CKPT.shared_memory_test_granularity]
-    LSpB_test_num = compilableLSpB // LSpB_test_unit
-    for i in range(LSpB_test_num):
-        s = compilableLSpB - i * LSpB_test_unit
-        code += shmem_kernel("test_shm_{}".format(s), s)
-    code += make_kernel_array("test_shm", LSpB_test_num, compilableLSpB, LSpB_test_unit)
-    code += no_abort_host_check_launchable("chk_shm", "test_shm", True)
-    code += """\
-bool chkfunc_LSpB(uint32_t idx) {return chk_shm(1, 1, idx);}
-void do_shm_chk(uint32_t maxLSpB, uint32_t LSpB_unit) {
-    uint32_t verifiedLSpBidx = get_min_true_from0(chkfunc_LSpB);
-    uint32_t verifiedLSpB = maxLSpB - LSpB_unit * verifiedLSpBidx;
-    write_value("limit_sharedmem_per_block", verifiedLSpB);
-}\n"""
-    # test register limits
-    Reg_test_unit = ckpt.values[ckpt.CKPT.register_test_granularity]
-    code += no_abort_launchable_LRpB_routine()
-    if conf.gpu_manufacturer == "nvidia":
-        code += no_abort_launchable_Reg_generate_kernels(compilableLRpT,
-            Reg_test_unit, regmin, "test_reg", "nvidia", False)
-        code += no_abort_host_check_launchable("chk_reg_LRpT", "test_reg_LRpT", True)
-        code += no_abort_host_check_launchable("chk_reg_LRpB", "test_reg_LRpB", True)
-        code += """\
-bool chkfunc_LRpT(uint32_t idx) {return chk_reg_LRpT(1, 1, idx);}
-bool chkfunc_LRpB(uint32_t val, uint32_t arg) {return chk_reg_LRpB(1,val*warp_size,arg);}
-void do_reg_chk(uint32_t maxLRpT, uint32_t Reg_unit, uint32_t initLRpB, uint32_t regmin) {
-    uint32_t verifiedLRpTidx = get_min_true_from0(chkfunc_LRpT);
-    uint32_t verifiedLRpT = maxLRpT - Reg_unit * verifiedLRpTidx;
-    if (maxLRpT%Reg_unit!=0 && verifiedLRpTidx>0)
-        verifiedLRpT = maxLRpT - (maxLRpT%Reg_unit) - (verifiedLRpTidx-1)*Reg_unit;
-    write_value("limit_registers_per_thread", verifiedLRpT);
-    uint32_t verifiedLRpB = do_LRpB_test(verifiedLRpT, Reg_unit, initLRpB,
-        chkfunc_LRpB, "Regs per Block", "regs/thread", regmin, 0);
-    int zz = {0, 0};
-    write_values("LRpB_test_info1", zz, 2); write_values("LRpB_test_data1", zz, 2);
-    write_value("limit_registers_per_block", verifiedLRpB);
-}\n"""
-    else:
-        code += no_abort_launchable_Reg_generate_kernels(compilableLRpT[1],
-            Reg_test_unit, regmin, "test_vreg", "amd", False)
-        code += no_abort_launchable_Reg_generate_kernels(compilableLRpT[0],
-            Reg_test_unit, regmin, "test_sreg", "amd", True)
-        code += no_abort_host_check_launchable("chk_vreg_LRpT", "test_vreg_LRpT", True)
-        code += no_abort_host_check_launchable("chk_vreg_LRpB", "test_vreg_LRpB", True)
-        code += no_abort_host_check_launchable("chk_sreg_LRpT", "test_sreg_LRpT", True)
-        code += no_abort_host_check_launchable("chk_sreg_LRpB", "test_sreg_LRpB", True)
-        code += """\
-bool chkfunc_LsRpT(uint32_t idx) {return chk_sreg_LRpT(1, 1, idx);}
-bool chkfunc_LvRpT(uint32_t idx) {return chk_vreg_LRpT(1, 1, idx);}
-bool chkfunc_LsRpB(uint32_t val, uint32_t arg) {return chk_sreg_LRpB(1,val*warp_size,arg);}
-bool chkfunc_LvRpB(uint32_t val, uint32_t arg) {return chk_vreg_LRpB(1,val*warp_size,arg);}
-void do_reg_chk(uint32_t maxLsRpT, uint32_t maxLvRpT, 
-        uint32_t Reg_unit, uint32_t initLsRpB, uint32_t initLvRpB, uint32_t regmin) {
-    uint32_t verifiedLsRpTidx = get_min_true_from0(chkfunc_LsRpT);
-    uint32_t verifiedLvRpTidx = get_min_true_from0(chkfunc_LvRpT);
-    uint32_t verifiedLRpT[2] = {
-        maxLsRpT - Reg_unit * verifiedLsRpTidx,
-        maxLvRpT - Reg_unit * verifiedLvRpTidx
-    };
-    if (maxLsRpT%Reg_unit!=0 && verifiedLsRpTidx>0)
-        verifiedLRpT[0] = maxLsRpT - (maxLsRpT%Reg_unit) - (verifiedLsRpTidx-1)*Reg_unit;
-    if (maxLvRpT%Reg_unit!=0 && verifiedLvRpTidx>0)
-        verifiedLRpT[1] = maxLvRpT - (maxLvRpT%Reg_unit) - (verifiedLvRpTidx-1)*Reg_unit;
-    write_values("limit_registers_per_thread", verifiedLRpT, 2);
-    uint32_t verifiedLRpB[2] = {
-        do_LRpB_test(verifiedLRpT[0], Reg_unit, initLsRpB, chkfunc_LsRpB,
-            "SRegs per Block", "sregs/thread", regmin, 0),
-        do_LRpB_test(verifiedLRpT[1], Reg_unit, initLvRpB, chkfunc_LvRpB,
-            "VRegs per Block", "vregs/thread", regmin, 1)
-    };
-    write_values("limit_registers_per_block", verifiedLRpB, 2);
-}\n"""
-    # main()
-    code += """\
-int main(int argc, char **argv) {{
-    hipSetDevice(0);
-    write_init("kernel_limits");
-    do_thr_chk({}, {});
-    do_shm_chk({}, {});\n""".format(propLTpB, propLTpG, compilableLSpB, LSpB_test_unit)
-    if conf.gpu_manufacturer == "nvidia":
-        code += "\tdo_reg_chk({}, {}, {}, {});\n".format(
-            compilableLRpT, Reg_test_unit, propLRpB, regmin)
-    else:
-        code += "\tdo_reg_chk({}, {}, {}, {}, {}, {});\n".format(
-            compilableLRpT[0], compilableLRpT[1], Reg_test_unit,
-                propLRpB[0], propLRpB[1], regmin)
-    code += """\
-    return 0;
-}\n"""
-    return code
-
-def checkfunc_LTpB_launchable_abort(val, args):
-    return runnable(
-        include() +\
-        normal_kernel("test") +\
-        abort_main_check_launchable("test", 1, val), args)
-
-def checkfunc_LTpG_launchable_abort(val, args):
-    return runnable(
-        include() +\
-        normal_kernel("test") +\
-        abort_main_check_launchable("test", val, 1), args)
-
-def checkfunc_LSpB_launchable_abort(val, args):
-    return runnable(
-        include() +\
-        shmem_kernel("test", val) +\
-        abort_main_check_launchable("test", 1, 1), args)
-
-def checkfunc_LRpT_launchable_abort_nvidia(val, args):
-    # should embed args[4] = regmin
-    return runnable(
-        include() +\
-        reg_kernel_nvidia_real_usage("test", val, args[4]) +\
-        abort_main_check_launchable("test", 1, 1), args)
-
-def checkfunc_LRpB_launchable_abort_nvidia(val, args):
-    # should embed args[4] = regmin, [5] = testR, 
-    # [6] = verifiedLTpB, [7] = warp_size
-    # val : num of warps to test
-    if val * args[7] > args[6] : # cannot launch over LTpB!
-        return False
-    return runnable(
-        include() +\
-        reg_kernel_nvidia_real_usage("test", args[5], args[4]) +\
-        abort_main_check_launchable("test", 1, val * args[7]),
-        args)
-
-def set_default_if_zero(val, default):
-    return val if val>0 else default
-
-def test_limits(proj_path, result_values):
-    out_dir = os.path.join(proj_path, "build/", conf.gpu_manufacturer, "kernel_limits")
-    tool.print_and_exec("mkdir -p " + out_dir)
-    tmp_src_file = os.path.join(out_dir, "tmp_src.cpp")
-    tmp_obj_file = os.path.join(out_dir, "tmp_obj")
-    getmax_args = [proj_path, out_dir, tmp_src_file, tmp_obj_file]
-
-    # get values from hipDeviceProp_t
-    if not runnable(get_from_deviceprop(out_dir), getmax_args):
-        return False
-    (propW, propLTpB, propLTpG, propLSpB, propLRpT, propLRpB) =\
-        parse_prop_report(os.path.join(out_dir, "prop_report.txt"))
-
-    # set default estimate value if prop is 0
-    propLTpB = set_default_if_zero(propLTpB, 1024)
-    propLTpG = set_default_if_zero(propLTpG, 1073741824)
-    propLSpB = set_default_if_zero(propLSpB, 65536)
-    if conf.gpu_manufacturer == "nvidia":
-        propLRpT = set_default_if_zero(propLRpT, 255)
-        propLRpB = set_default_if_zero(propLRpB, 65536)
-    else:
-        propLRpT[0] = set_default_if_zero(propLRpT[0], 100)
-        propLRpT[1] = set_default_if_zero(propLRpT[1], 256)
-        propLRpB[0] = set_default_if_zero(propLRpB[0], 65536)
-        propLRpB[1] = set_default_if_zero(propLRpB[1], 65536)
-
-    ## Compilability check
-    compilableLSpB = get_max_true(checkfunc_LSpB_compilable, getmax_args, propLSpB)
-    if conf.gpu_manufacturer == "nvidia":
-        compilableLRpT =\
-            get_max_true(checkfunc_LRpT_compilable_nvidia, getmax_args, propLRpT)
-    else:
-        compilableLRpT = [\
-            get_max_true(checkfunc_LRpT_compilable_amd_sgpr, getmax_args, propLRpT[0]),\
-            get_max_true(checkfunc_LRpT_compilable_amd_vgpr, getmax_args, propLRpT[1])]
-
-    ## Launchability check
-    ### currently, only gpgpusim can abort!
-    kernel_can_abort = conf.gpu_manufacturer=="nvidia" and conf.simulator_driven
-    regmin = 0
-    if conf.gpu_manufacturer == "nvidia":
-        regmin = find_regmin_nvidia(compilableLRpT, getmax_args)
-    warp_size = propW
-    Reg_test_unit = ckpt.values[ckpt.CKPT.register_test_granularity]
-    if not kernel_can_abort:
-        if not runnable(
-            no_abort_launchable_test_code(out_dir, warp_size, propLTpB, propLTpG,
-                compilableLSpB, compilableLRpT, propLRpB, regmin), getmax_args):
+    def compilable(self, code):
+        script_runner.create_file(code, self.tmpsrc)
+        return script_runner.compile_succeed(self.conf, self.tmpsrc, self.tmpobj,
+            [self.src_dir, self.build_dir])
+    
+    def runnable(self, code):
+        if not self.compilable(code):
             exit(1)
-    else:
-        ## Here, nVidia is assumed for now!
-        verifiedLTpB = get_max_true(checkfunc_LTpB_launchable_abort,\
-            getmax_args, propLTpB)
-        verifiedLTpG = propLTpG
-        #verifiedLTpG = get_max_true(checkfunc_LTpG_launchable_abort,\
-        #    getmax_args, propLTpG)
-        verifiedLSpB = get_max_true_given_maxval(
-            checkfunc_LSpB_launchable_abort, getmax_args,
-            compilableLSpB, ckpt.values[ckpt.CKPT.shared_memory_test_granularity])
-        verifiedLRpT = get_max_true_given_maxval(
-            checkfunc_LRpT_launchable_abort_nvidia, getmax_args + [regmin],
-            compilableLRpT, Reg_test_unit)
+        return script_runner.run_succeed(self.conf, self.build_dir, "tmp_obj")
 
-        maxb_for_LRpB = []
-        verifiedLRpB = 0
-        # measure for testR = m * Reg_test_unit && testR > regmin+16
-        testR = 0 ; num_LRpB_tests = 0 ; min_testR = 0
-        while (True):
-            testR += Reg_test_unit
-            if testR <= regmin + 16:
-                continue
-            if testR > verifiedLRpT:
-                break
-            num_LRpB_tests += 1
-            if min_testR == 0:
-                min_testR = testR
-            # measure max_b for testR
+    def get_from_deviceprop(self):
+        prop_report_path = os.path.join(self.build_dir, f"prop_report.txt")
+        if not self.runnable(deviceprop_host_code(
+            self.conf.manufacturer(), prop_report_path)):
+            return False
+        (self.warpSize, self.propLTpB, self.propLTpG, self.propLSpB,
+            self.propLRpT, self.propLRpB) = parse_prop_report(prop_report_path)
+        return True
+
+    @staticmethod
+    def set_default_if_zero(val, default):
+        return val if val>0 else default
+    def set_default_if_invalid_prop(self):
+        self.propLTpB = kernel_limits.set_default_if_zero(self.propLTpB, 1024)
+        self.propLTpG = kernel_limits.set_default_if_zero(self.propLTpG, 1073741824)
+        self.propLSpB = kernel_limits.set_default_if_zero(self.propLSpB, 65536)
+        for i in range(len(self.propLRpT)):
+            self.propLRpT[i] = kernel_limits.set_default_if_zero(self.propLRpT[i], 200)
+            self.propLRpB[i] = kernel_limits.set_default_if_zero(self.propLRpB[i], 2048)
+
+    def compilability_check(self):
+        self.compilableLSpB = get_max_true(
+            checkfunc_LSpB_compilable, self, self.propLSpB)
+        if self.conf.manufacturer() == "nvidia":
+            self.compilableLRpT = [get_max_true(
+                checkfunc_LRpT_compilable_nvidia, self, self.propLRpT[0])]
+        else: # "amd":
+            self.compilableLRpT = [
+                get_max_true(checkfunc_LRpT_compilable_amd_sreg,
+                    self, self.propLRpT[0]),
+                get_max_true(checkfunc_LRpT_compilable_amd_vreg,
+                    self, self.propLRpT[1])]
+        return True
+
+    def calc_regmin(self):
+        self.regmin = 0
+        if self.conf.manufacturer() == "nvidia":
+            for i in range(self.compilableLRpT[0]):
+                testR = self.compilableLRpT[0] - i
+                script_runner.create_file(
+                    include(minimum=True) +
+                    reg_kernel("test", "nvidia", testR, 0) +
+                    compilable_host_code("test"), self.tmpsrc)
+                regcnts = script_runner.compile_and_check_resource(
+                    self.conf, self.tmpsrc, self.tmpobj, [self.src_dir])
+                if regcnts[0] == 0:
+                    self.regmin = i
+                    return
+
+    def launchability_check_abortable(self):
+        # nvidia is assumed here!
+        ## TEST LTpB, LTpG, LSpB, LRpT
+        Reg_unit = self.conf.get_confval(config_values.register_test_granularity)
+        self.verifiedLTpB = get_max_true(checkfunc_LTpB_launchable_abort,
+            self, self.propLTpB)
+        self.verifiedLTpG = self.propLTpG # too long time if actually verified..
+        # self.verifiedLTpG = get_max_true(checkfunc_LTpG_launchable_abort,
+        #   self, self.propLTpG)
+        self.verifiedLSpB = get_max_true_given_maxval(
+            checkfunc_LSpB_launchable_abort, self, self.compilableLSpB,
+            self.conf.get_confval(config_values.shared_memory_test_granularity))
+        self.verifiedLRpT = [get_max_true_given_maxval(
+            checkfunc_LRpT_launchable_abort_nvidia, self, self.compilableLRpT[0],
+            Reg_unit)]
+        ## TEST LRpB
+        self.verifiedLRpB = [0] ; maxb_for_LRpB = []
+            # measure for testR = m * Reg_test_unit && testR > regmin+16
+        min_testR = ((self.regmin+16)//Reg_unit + 1) * Reg_unit
+        num_LRpB_tests = (self.verifiedLRpT[0] - min_testR) // Reg_unit + 1
+        for i in range(num_LRpB_tests):
+            testR = min_testR + i * Reg_unit
             max_b = get_max_true(
                 checkfunc_LRpB_launchable_abort_nvidia,
-                getmax_args + [regmin, testR, verifiedLTpB, warp_size],
-                propLRpB // testR)
+                (self, testR), self.propLRpB[0] // testR)
             maxb_for_LRpB += [max_b]
-            verifiedLRpB = max(verifiedLRpB, max_b * testR)
+            self.verifiedLRpB[0] = max(self.verifiedLRpB[0], max_b * testR)
 
-        LRpB_graph = "@Reg per Block:{}:reg/thread:{}:{}:max B:".format(
-            num_LRpB_tests, min_testR, Reg_test_unit)
+        LRpB_graph = f"@Reg per Block:{num_LRpB_tests}:" +\
+            f"reg/thread:{min_testR}:{Reg_unit}:max B:"
         LRpB_data_str = ""
         for i in range(num_LRpB_tests-1):
-            LRpB_data_str += "{},".format(maxb_for_LRpB[i])
-        LRpB_data_str += "{}".format(maxb_for_LRpB[num_LRpB_tests-1])
+            LRpB_data_str += f"{maxb_for_LRpB[i]},"
+        LRpB_data_str += f"{maxb_for_LRpB[num_LRpB_tests-1]}"
         LRpB_graph += LRpB_data_str + "\n"
-        
-        reportfile = open(os.path.join(out_dir, "report.txt"), 'w')
+        ## WRITE to report
+        reportfile = open(self.report_path, 'w')
         reportfile.write("## ========== kernel_limits report ==========\n")
-        reportfile.write("limit_threads_per_block={}\n".format(verifiedLTpB))
-        reportfile.write("limit_threads_per_grid={}\n".format(verifiedLTpG))
-        reportfile.write("limit_sharedmem_per_block={}\n".format(verifiedLSpB))
-        reportfile.write("limit_registers_per_thread={}\n".format(verifiedLRpT))
-        
+        reportfile.write(f"limit_threads_per_block={self.verifiedLTpB}\n")
+        reportfile.write(f"limit_threads_per_grid={self.verifiedLTpG}\n")
+        reportfile.write(f"limit_sharedmem_per_block={self.verifiedLSpB}\n")
+        reportfile.write(f"limit_registers_per_thread={self.verifiedLRpT[0]}\n")
         reportfile.write(LRpB_graph)
-        reportfile.write("LRpB_test_info0=[{}, {}, {}]\n".format(
-            num_LRpB_tests, min_testR, Reg_test_unit))
-        if num_LRpB_tests == 1: # dummy, to circumvent compile err in mp_and_buffers
-            reportfile.write("LRpB_test_data0=[{}, 0]\n".format(LRpB_data_str))
-        else:
-            reportfile.write("LRpB_test_data0=[{}]\n".format(LRpB_data_str))
-        reportfile.write("LRpB_test_info1=[0, 0]\n")
-        reportfile.write("LRpB_test_data1=[0, 0]\n")
-        reportfile.write("limit_registers_per_block={}\n".format(verifiedLRpB))
+        reportfile.write(f"LRpB_test_info0=[{num_LRpB_tests}, {min_testR}, {Reg_unit}]\n")
+        reportfile.write(f"LRpB_test_data0=[{LRpB_data_str}]\n")
+        reportfile.write("LRpB_test_info1=0\n")
+        reportfile.write("LRpB_test_data1=0\n")
+        reportfile.write(f"limit_registers_per_block={self.verifiedLRpB[0]}\n")
         reportfile.close()
 
-    ## write prop warp size to the report
-    reportfile = open(os.path.join(out_dir, "report.txt"), 'a')
-    reportfile.write("warp_size={}\n".format(propW))
-    reportfile.close()
+        return True
 
-    return True
+    def launchability_noabort_kernel(self):
+        code = normal_kernel("test_thr")
+        shmem_unit = self.conf.get_confval(config_values.shared_memory_test_granularity)
+        shmem_test_num = self.compilableLSpB // shmem_unit
+        for i in range(shmem_test_num):
+            s = self.compilableLSpB - i * shmem_unit
+            code += shmem_kernel(f"test_shm_{s}", s)
+        code += make_kernel_array(
+            "test_shm", shmem_test_num, self.compilableLSpB, shmem_unit)
+        reg_unit = self.conf.get_confval(config_values.register_test_granularity)
+        if self.conf.manufacturer() == "nvidia":
+            code += launchable_noabort_reg_kernel_set(self.compilableLRpT[0],
+                reg_unit, self.regmin, "test_reg", "nvidia", 0)
+        else: # "amd":
+            code += launchable_noabort_reg_kernel_set(self.compilableLRpT[1],
+                reg_unit, self.regmin, "test_vreg", "amd", 1)
+            code += launchable_noabort_reg_kernel_set(self.compilableLRpT[0],
+                reg_unit, self.regmin, "test_sreg", "amd", 0)
+        return code
+    def launchability_noabort_host(self):
+        code = launchable_noabort_host_code("chk_thr", "test_thr", False)
+        code += launchable_noabort_host_code("chk_shm", "test_shm", True)
+        if self.conf.manufacturer() == "nvidia":
+            code += launchable_noabort_host_code("chk_reg_LRpT", "test_reg_LRpT", True)
+            code += launchable_noabort_host_code("chk_reg_LRpB", "test_reg_LRpB", True)
+        else: # "amd":
+            code += launchable_noabort_host_code("chk_vreg_LRpT", "test_vreg_LRpT", True)
+            code += launchable_noabort_host_code("chk_vreg_LRpB", "test_vreg_LRpB", True)
+            code += launchable_noabort_host_code("chk_sreg_LRpT", "test_sreg_LRpT", True)
+            code += launchable_noabort_host_code("chk_sreg_LRpB", "test_sreg_LRpB", True)
+        code += deliver_value_code("deliver_propLTpB", self.propLTpB)
+        code += deliver_value_code("deliver_propLTpG", self.propLTpG)
+        code += deliver_value_code("deliver_compilableLSpB", self.compilableLSpB)
+        code += deliver_value_code("deliver_LSpB_test_unit",
+            self.conf.get_confval(config_values.shared_memory_test_granularity))
+        for i in range(len(self.compilableLRpT)):
+            code += deliver_value_code(f"deliver_compilableLRpT{i}", self.compilableLRpT[i])
+            code += deliver_value_code(f"deliver_propLRpB{i}", self.propLRpB[i])
+        code += deliver_value_code("deliver_Reg_test_unit",
+            self.conf.get_confval(config_values.register_test_granularity))
+        code += deliver_value_code("deliver_regmin", self.regmin)
+        code += deliver_value_code("warp_size", self.warpSize)
+        return code
+    def launchability_check_not_abortable(self):
+        src_path = os.path.join(self.src_dir, f"{self.tname}_launchable.cpp")
+        out_bin_path = os.path.join(self.build_dir, self.tname)
+        out_host_path = os.path.join(self.build_dir, f"{self.tname}_launchable_host.h")
+        out_kern_path = os.path.join(self.build_dir, f"{self.tname}_launchable.h")
+        # generate kernels and host codes
+        script_runner.create_file(self.launchability_noabort_kernel(), out_kern_path)
+        script_runner.create_file(self.launchability_noabort_host(), out_host_path)
+        # insert inputs into tmp src file
+        values_delivery.embed_values_to_cpp(
+            self.conf.manufacturer(), self.report_path, f"{self.tname}_launchable",
+            self.result_values, self.conf.get_cvalues(), src_path, self.tmpsrc)
+        # compile
+        if not script_runner.compile_succeed(
+            self.conf, self.tmpsrc, self.tmpobj, [self.src_dir, self.build_dir]):
+            return False
+        # run
+        return script_runner.run_succeed(self.conf, self.build_dir, "tmp_obj")
 
+    def append_warpsize_to_report(self):
+        rf = open(self.report_path, 'a')
+        rf.write(f"warp_size={self.warpSize}\n")
+        rf.close()
+
+    def run(self):
+        self.tmpsrc = os.path.join(self.build_dir, "tmp_src.cpp")
+        self.tmpobj = os.path.join(self.build_dir, "tmp_obj")
+
+        # Deviceprop
+        if not self.get_from_deviceprop():
+            return False
+        self.set_default_if_invalid_prop()
+
+        # Compilable?
+        if not self.compilability_check():
+            return False
+        self.calc_regmin()
+
+        # Launchable?
+        ## currently, only gpgpusim can abort
+        kernel_can_abort = self.conf.manufacturer() == "nvidia" and\
+            self.conf.is_simulator()
+        if kernel_can_abort:
+            if not self.launchability_check_abortable():
+                return False
+        else:
+            if not self.launchability_check_not_abortable():
+                return False
+
+        self.append_warpsize_to_report()
+
+        return True

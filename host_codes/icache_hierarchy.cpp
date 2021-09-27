@@ -1,29 +1,28 @@
 // MANUFACTURER=1 (nvidia), =0 (amd)
 #define MANUFACTURER
-#define REPORT_DIR
+#define REPORT_FILE
+#define KERNEL_FILE
 
-#define ckpt_max_icache_investigate_repeats
-#define ckpt_icache_investigate_interval
+#define ckpt_max_icache_investigate_KiB
+#define ckpt_icache_investigate_interval_B
 
-#include "tool.h"
-#include "icache_hierarchy.h"
+#include "gpudiag_runtime.h"
 
 int main(int argc, char **argv) {
-    CHECK(hipSetDevice(0));
+    GDInit();
 
-    const int num_iters = ckpt_max_icache_investigate_repeats /
-        ckpt_icache_investigate_interval;
+    const int num_iters = ICACHE_MAX_REPEATS / ICACHE_INTERVAL;
     float data[num_iters];
 
     uint64_t hres, *dres;
-    hipMalloc(&dres, sizeof(uint64_t));
+    GDMalloc(&dres, sizeof(uint64_t));
     for (int i=0; i<num_iters; i++) {
-        hipLaunchKernelP(measure_icache[i], dim3(1), dim3(1), 0, 0, dres);
-        hipStreamSynchronize(0);
-        hipMemcpy(&hres, dres, sizeof(uint64_t), hipMemcpyDeviceToHost);
-        data[i] = (float)hres / (float)((i+1)*ckpt_icache_investigate_interval);
+        GDLaunchKernel(measure_icache[i], dim3(1), dim3(1), 0, 0, dres);
+        GDSynchronize();
+        GDMemcpyDToH(&hres, dres, sizeof(uint64_t));
+        data[i] = (float)hres / (float)((i+1)*ICACHE_INTERVAL);
     }
-    hipFree(dres);
+    GDFree(dres);
 
     // analyze
     int max_level = 20;
@@ -45,7 +44,7 @@ int main(int argc, char **argv) {
             // new hierarchy detected
             current_level++;
             capacity[current_level-1] = ICACHE_INSTSIZE_A +
-                ICACHE_INSTSIZE_B * ckpt_icache_investigate_interval * i-1;
+                ICACHE_INSTSIZE_B * ICACHE_INTERVAL * i-1;
             current_level_time = -1;
             continue;
         }
@@ -72,15 +71,15 @@ int main(int argc, char **argv) {
     // write
     write_init("icache_hierarchy");
     write_graph_data("Icache hierarchy", num_iters, "inst. size(B)",
-        ICACHE_INSTSIZE_A + ICACHE_INSTSIZE_B * ckpt_icache_investigate_interval,
-        ICACHE_INSTSIZE_B * ckpt_icache_investigate_interval,
+        ICACHE_INSTSIZE_A + ICACHE_INSTSIZE_B * ICACHE_INTERVAL,
+        ICACHE_INSTSIZE_B * ICACHE_INTERVAL,
         "total time / repeat", data);
     if (max_observed_level > 0)
         write_values("icache_capacities", capacity, max_observed_level);
     else {
         write_line("## Only 1 level is observed, L1I capacity is at least following.");
         write_value("icache_capacities", ICACHE_INSTSIZE_A + num_iters * 
-            ckpt_icache_investigate_interval * ICACHE_INSTSIZE_B);
+            ICACHE_INTERVAL * ICACHE_INSTSIZE_B);
     }
 
     return 0;

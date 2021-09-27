@@ -1,14 +1,14 @@
 // MANUFACTURER=1 (nvidia), =0 (amd)
 #define MANUFACTURER
-#define REPORT_DIR
+#define REPORT_FILE
+#define KERNEL_FILE
 
 #define limit_sharedmem_per_block
 
-#include "tool.h"
-#include "dcache_hierarchy.h"
+#include "gpudiag_runtime.h"
 
 int main(int argc, char **argv) {
-    CHECK(hipSetDevice(0));
+    GDInit();
     write_init("dcache_hierarchy");
 
     // === L1D Linesize test ===
@@ -16,13 +16,13 @@ int main(int argc, char **argv) {
     uint32_t *darr;
     uint64_t *hres, *dres;
     int resarrsize = num_linesize_repeat * sizeof(uint64_t);
-    hipMalloc(&darr, num_linesize_repeat * sizeof(uint32_t));
+    GDMalloc(&darr, num_linesize_repeat * sizeof(uint32_t));
     hres = (uint64_t*)malloc(resarrsize);
-    hipMalloc(&dres, resarrsize);
-    hipLaunchKernelP(measure_l1d_linesize, dim3(1), dim3(1), 0, 0, darr, dres);
-    hipStreamSynchronize(0);
-    hipMemcpy(hres, dres, resarrsize, hipMemcpyDeviceToHost);
-    hipFree(darr); hipFree(dres);
+    GDMalloc(&dres, resarrsize);
+    GDLaunchKernel(measure_l1d_linesize, dim3(1), dim3(1), 0, 0, darr, dres);
+    GDSynchronize();
+    GDMemcpyDToH(hres, dres, resarrsize);
+    GDFree(darr); GDFree(dres);
     // analyze : ignore hres[0]
     uint64_t latency_min = hres[1], latency_max = hres[1];
     for (int i=1; i<num_linesize_repeat; i++) {
@@ -55,14 +55,14 @@ int main(int argc, char **argv) {
     // == Dcache Hierarchy test ===
     resarrsize = NUM_DCACHE_REPEAT * sizeof(uint64_t);
     int testarrsize = NUM_DCACHE_REPEAT * l1d_linesize;
-    hipMalloc(&darr, testarrsize);
+    GDMalloc(&darr, testarrsize);
     hres = (uint64_t*)malloc(resarrsize);
-    hipMalloc(&dres, resarrsize);
-    hipLaunchKernelP(measure_dcache, dim3(1), dim3(1), 0, 0,
+    GDMalloc(&dres, resarrsize);
+    GDLaunchKernel(measure_dcache, dim3(1), dim3(1), 0, 0,
         darr, l1d_linesize / sizeof(uint32_t), dres);
-    hipStreamSynchronize(0);
-    hipMemcpy(hres, dres, resarrsize, hipMemcpyDeviceToHost);
-    hipFree(darr); hipFree(dres);
+    GDSynchronize();
+    GDMemcpyDToH(hres, dres, resarrsize);
+    GDFree(darr); GDFree(dres);
     // analyze : ignore hres[0], must be hit
     const int max_level = 10; int current_level = 0;
     int data_cnt[max_level]; for (int l=0; l<max_level; l++) data_cnt[l] = 0;

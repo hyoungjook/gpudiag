@@ -1,12 +1,14 @@
-from enum import Enum
-from enum import auto
+from enum import Enum, auto
 
 class Test(Enum):
     kernel_limits = auto()
     icache_hierarchy = auto()
     dcache_hierarchy = auto()
     functional_units = auto()
-    mp_and_buffers = auto()
+    num_mp = auto()
+    warpstate_buffer = auto()
+    sharedmem_buffer = auto()
+    regfile_buffer = auto()
 
 class Feature(Enum):
     warp_size = auto()
@@ -26,14 +28,18 @@ class Feature(Enum):
     dcache_linesizes = auto()
     dcache_latencies = auto()
 
+    c_br = auto()
+
     num_mp = auto()
+
     barrier_buffer_size = auto()
     warp_state_buffer_size = auto()
+    nslot_n1n2 = auto()
+
     shared_memory_size = auto()
     shared_memory_alloc_unit = auto()
-    register_file_size = auto()
-    register_file_alloc_unit = auto()
-    scalar_register_file_size = auto()
-    scalar_register_file_alloc_unit = auto()
-    vector_register_file_size = auto()
-    vector_register_file_alloc_unit = auto()
+    
+    register_file_type0_size = auto()
+    register_file_type0_alloc_unit = auto()
+    register_file_type1_size = auto()
+    register_file_type1_alloc_unit = auto()
