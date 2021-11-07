@@ -147,7 +147,6 @@ cudaMemcpy(destp, srcp, size, cudaMemcpyDeviceToHost)
 {printf("  Launched " #kern ": (G,B)=(%d, %d)\n",(int)gDim.x,(int)bDim.x);\
 fflush(stdout); kern<<<gDim, bDim, dynshm>>>(__VA_ARGS__);}
 
-#ifdef KERNEL_FILE
 #define GDThreadIdx (threadIdx.x)
 #define GDBlockIdx (blockIdx.x)
 #define __gdkernel __global__
@@ -156,6 +155,7 @@ fflush(stdout); kern<<<gDim, bDim, dynshm>>>(__VA_ARGS__);}
 #define GDsyncthreads() __syncthreads()
 #define GDatomicAdd(p, val) atomicAdd(p, val)
 #define GDclock() clock()
+#ifdef KERNEL_FILE
 #include KERNEL_FILE
 #endif
 
@@ -189,7 +189,6 @@ hipMemcpy(destp, srcp, size, hipMemcpyDeviceToHost)
 {printf("  Launched " #kern ": (G,B)=(%d, %d)\n",(int)gDim.x,(int)bDim.x);\
 fflush(stdout); hipLaunchKernelGGL(kern, gDim, bDim, dynshm, stream, __VA_ARGS__);}
 
-#ifdef KERNEL_FILE
 #define GDThreadIdx (hipThreadIdx_x)
 #define GDBlockIdx (hipBlockIdx_x)
 #define __gdkernel __global__
@@ -198,6 +197,7 @@ fflush(stdout); hipLaunchKernelGGL(kern, gDim, bDim, dynshm, stream, __VA_ARGS__
 #define GDsyncthreads() __syncthreads()
 #define GDatomicAdd(p, val) atomicAdd(p, val)
 #define GDclock() clock()
+#ifdef KERNEL_FILE
 #include KERNEL_FILE
 #endif
 

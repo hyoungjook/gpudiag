@@ -37,6 +37,22 @@ int main(int argc, char **argv) {
     uint64_t *data_warp = (uint64_t *)malloc(arrsize);
     uint64_t *data_time = (uint64_t *)malloc(arrsize);
 
+    // sort warp_ids by first scheduled time
+    uint64_t *sorted_warp = (uint64_t *)malloc(max_b * sizeof(uint64_t));
+    // sorted_warp[real_warpid] = sorted_warpid
+    for (int i=0; i<max_b; i++) {
+        int num_warps_earlier = 0;
+        // real_warpid i's first scheduled time
+        uint64_t first_time = hres[i * Nrepeat];
+        // count earlier
+        for (int j=0; j<max_b; j++) {
+            if (j==i) continue;
+            if (hres[j*Nrepeat] < first_time) num_warps_earlier++;
+        }
+        // save to sorted
+        sorted_warp[i] = num_warps_earlier;
+    }
+
     for (int i=0; i<Nrepeat*max_b; i++) {
         // find n'th minimum
         uint64_t minval = (uint64_t)(-1), minwarp = 0;
@@ -48,7 +64,7 @@ int main(int argc, char **argv) {
         }
         hres[min_j] = (uint64_t)(-1);
         // fill the data
-        data_warp[i] = minwarp;
+        data_warp[i] = sorted_warp[minwarp];
         data_time[i] = minval;
     }
 
@@ -58,5 +74,8 @@ int main(int argc, char **argv) {
 
     GDFree(dres);
     free(hres);
+    free(data_warp);
+    free(data_time);
+    free(sorted_warp);
     return 0;
 }

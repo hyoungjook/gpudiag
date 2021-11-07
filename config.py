@@ -4,13 +4,13 @@ from env.config_template import config_values as confval
 
 ##### ========================================= #####
 ##### Select the config preset you want to use! #####
-select_config_preset = "gem5"
+select_config_preset = "g4ad"
 
 ##### ========================================= #####
 #####         Select which test to run!         #####
 select_tests_to_run = {
-    Test.kernel_limits      : True,
-    Test.icache_hierarchy   : False,
+    Test.kernel_limits      : False,
+    Test.icache_hierarchy   : True,
     Test.dcache_hierarchy   : False,
     Test.functional_units   : False,
     Test.num_mp             : False,
@@ -76,14 +76,13 @@ define_config_presets = [
         conf.compile_cmd: "hipcc --amdgpu-target=gfx1011 " +\
             "$SRC -o $BIN",
         conf.run_cmd: "$DIR/$BIN",
-        conf.objdump_cmd: "extractkernel -i $BIN && " +\
-            "mv $BIN-*.isa $OUT", # not verified yet
+        conf.objdump_cmd: "", # not supported!
         conf.use_values: {
             confval.shared_memory_test_granularity: 128,
             confval.register_test_granularity: 16,
             confval.max_icache_investigate_KiB: 64,
             confval.icache_investigate_interval_B: 2048,
-            confval.max_dcache_investigate_repeats: 1024,
+            confval.max_dcache_investigate_repeats: 16384,
             confval.fu_latency_repeats: 32,
             confval.nslot_timeout_multiplier: 10,
         }
