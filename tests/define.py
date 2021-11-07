@@ -9,6 +9,7 @@ class Test(Enum):
     warpstate_buffer = auto()
     sharedmem_buffer = auto()
     regfile_buffer = auto()
+    warpsched_policy = auto()
 
 class Feature(Enum):
     warp_size = auto()

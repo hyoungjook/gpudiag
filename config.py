@@ -17,6 +17,7 @@ select_tests_to_run = {
     Test.warpstate_buffer   : False,
     Test.sharedmem_buffer   : False,
     Test.regfile_buffer     : False,
+    Test.warpsched_policy   : False,
 }
 
 ## You can define the config preset that matches your env. ##
@@ -64,6 +65,27 @@ define_config_presets = [
             confval.max_dcache_investigate_repeats: 1024,
             confval.fu_latency_repeats: 32,
             confval.nslot_timeout_multiplier: 5,
+        }
+    },
+
+    # AWS g4ad config
+    {   conf.name: "g4ad",
+        conf.manufacturer: "amd",
+        conf.is_simulator: False,
+        conf.simulator_path: "",
+        conf.compile_cmd: "hipcc --amdgpu-target=gfx1011 " +\
+            "$SRC -o $BIN",
+        conf.run_cmd: "$DIR/$BIN",
+        conf.objdump_cmd: "extractkernel -i $BIN && " +\
+            "mv $BIN-*.isa $OUT", # not verified yet
+        conf.use_values: {
+            confval.shared_memory_test_granularity: 128,
+            confval.register_test_granularity: 16,
+            confval.max_icache_investigate_KiB: 64,
+            confval.icache_investigate_interval_B: 2048,
+            confval.max_dcache_investigate_repeats: 1024,
+            confval.fu_latency_repeats: 32,
+            confval.nslot_timeout_multiplier: 10,
         }
     },
 ]

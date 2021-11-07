@@ -74,6 +74,11 @@ class result_manager:
                 max_x = max(max_x, xdata[i])
         # ydata
         ylabel = tokens[5]
+        data_connect_with_line = False
+        if ylabel[0:2] == "--":
+            # should connect dots with lines
+            data_connect_with_line = True
+            ylabel = ylabel[2:]
         ydata = [] ; ystrs = tokens[6].split(',')
         for i in range(dataN):
             ydata += [float(ystrs[i])]
@@ -94,7 +99,10 @@ class result_manager:
                     addline_x = [0, max_x] ; addline_y = [y_itcpt, y_itcpt+slope*max_x]
             plt.plot(addline_x, addline_y, 'k--', label=linelabel)
         # plot
-        plt.plot(xdata, ydata, 'ko')
+        if data_connect_with_line:
+            plt.plot(xdata, ydata, 'ko--')
+        else:
+            plt.plot(xdata, ydata, 'ko')
         if len(tokens) > 7:
             plt.legend()
         plt.title(title)

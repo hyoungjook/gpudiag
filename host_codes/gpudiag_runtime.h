@@ -52,6 +52,7 @@ void write_values(const char *fname, T *vals, int size) {
 }
 
 // no ':' allowed in names, but ' ' is allowed.
+// if ylabel starts with '--', points will be connected with line.
 template <typename Tx, typename Ty>
 void write_graph_data(const char *title, int n, const char *xlabel, Tx x0, Tx dx,
         const char *ylabel, Ty *ys) {
@@ -59,6 +60,21 @@ void write_graph_data(const char *title, int n, const char *xlabel, Tx x0, Tx dx
     std::ofstream out(REPORT_FILE, std::ios_base::app);
     out << "@" << title << ":" << n << ":";
     out << xlabel << ":" << x0 << ":" << dx << ":";
+    out << ylabel << ":";
+    for (int i=0; i<n-1; i++) out << ys[i] << ",";
+    out << ys[n-1] << std::endl;
+    out.close();
+}
+
+template <typename Tx, typename Ty>
+void write_graph_data_xs(const char *title, int n, const char *xlabel, Tx *xs,
+        const char *ylabel, Ty *ys) {
+    assert(n > 0);
+    std::ofstream out(REPORT_FILE, std::ios_base::app);
+    out << "@" << title << ":" << n << ":";
+    out << xlabel << ":p:";
+    for (int i=0; i<n-1; i++) out << xs[i] << ",";
+    out << xs[n-1] << ":";
     out << ylabel << ":";
     for (int i=0; i<n-1; i++) out << ys[i] << ",";
     out << ys[n-1] << std::endl;

@@ -3,14 +3,26 @@ Systematic reverse-engineering diagnosis tool for GPUs.
 made by Hyoungjoo Kim, Seoul Nat'l University, 2021
 
 ## Requirements
+The target GPU HW and driver, or a GPU simulator should be installed to the system.
+Also, a supported GPU runtime should be installed.
+GPUDiag supports CUDA, ROCm HIP and OpenCL(partially supported, not recommended).
+In addition, python3 and matplotlib is required.
 ~~~shell
-sudo apt install -y python3 pip
+sudo apt install -y python3
+python3 -m pip install --upgrade pip
 pip3 install matplotlib
 ~~~
 
 ## How to use
+### Modify config.py
+- Add your environment info to `define_config_presets` in `config.py`.
+- Set `select_config_preset` in `config.py` to your preset name.
+- Select the tests you want to run in `select_tests_to_run` in `config.py`
+    - For `functional_units` test, you should also modify `nvidia_insts_to_test` or `amd_insts_to_test` in `tests/functional_units.py`.
+
+### Execute
+After setting `config.py`, to run the test set,
 ~~~shell
-# set config.py
 python3 gpudiag.py
 ~~~
 If you want to clean build & result files,
