@@ -3,4 +3,5 @@
 /result_graphs
 *.png
 .vscode
+.DS_Store
 __pycache__

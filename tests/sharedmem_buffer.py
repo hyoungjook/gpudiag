@@ -8,28 +8,28 @@ def measure_shmem_code(limit_shmem, shmem_unit):
     code = ""
     for s in range(shmem_unit, limit_shmem+1, shmem_unit):
         code += f"""\
-__global__ void measure_shmem_{s}(uint32_t *sync, uint32_t G,
-        uint64_t timeout, uint32_t *is_timeout, uint64_t *totalclk) {{
+__gdkernel void measure_shmem_{s}(__gdbufarg uint32_t *sync, uint32_t G,
+        uint64_t timeout, __gdbufarg uint32_t *is_timeout, __gdbufarg uint64_t *totalclk) {{
     uint64_t sclk, eclk, toclk;
     bool thread0 = (GDThreadIdx == 0);
     bool chktime = (timeout != 0);
     volatile uint32_t *chksync = sync;
-    __syncthreads();
-    sclk = clock();
+    GDsyncthreads();
+    sclk = GDclock();
     toclk = sclk + timeout;
-    if (thread0) atomicAdd(sync, 1);
+    if (thread0) GDatomicAdd(sync, 1);
     while(*chksync < G) {{
-        if (chktime && clock() > toclk) {{
+        if (chktime && GDclock() > toclk) {{
             *is_timeout = 1; return;
         }}
     }}
-    eclk = clock();
+    eclk = GDclock();
     if (thread0) totalclk[GDBlockIdx] = eclk - sclk;
     // ensure shmem usage
     if (G > 0) return; // do not execute, just compile
-    __shared__ uint8_t arr[{s}];
+    __gdshmem uint8_t arr[{s}];
     uint8_t *fakeptr = (uint8_t*)sync;
-    for (int i=0; i<{s}; i++) arr[i] = (uint8_t)clock();
+    for (int i=0; i<{s}; i++) arr[i] = (uint8_t)GDclock();
     for (int i=0; i<{s}; i++) fakeptr[i] = arr[i];
 }}
 """

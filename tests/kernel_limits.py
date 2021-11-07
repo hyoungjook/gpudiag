@@ -80,23 +80,23 @@ def return_if_real():
 
 def normal_kernel(kernel_name):
     return f"""\
-__global__ void {kernel_name}(uint8_t *r, bool real) {{
+__gdkernel void {kernel_name}(__gdbufarg uint8_t *r, bool real) {{
     {return_if_real()}
 }}
 """
 
 def shmem_kernel(kernel_name, shmem_size):
     return f"""\
-__global__ void {kernel_name}(uint8_t *r, bool real) {{
+__gdkernel void {kernel_name}(__gdbufarg uint8_t *r, bool real) {{
     {return_if_real()}
-    __shared__ uint8_t arr[{shmem_size}];
-    for (int i=0; i<{shmem_size}; i++) arr[i] = (uint8_t)clock();
+    __gdshmem uint8_t arr[{shmem_size}];
+    for (int i=0; i<{shmem_size}; i++) arr[i] = (uint8_t)GDclock();
     for (int i=0; i<{shmem_size}; i++) r[i] = arr[i];
 }}\n"""
 
 def reg_kernel(kernel_name, manufacturer, reg_val, reg_type):
     code = f"""\
-__global__ void {kernel_name}(uint8_t *r, bool real) {{
+__gdkernel void {kernel_name}(__gdbufarg uint8_t *r, bool real) {{
     {return_if_real()}
 """
     if manufacturer == "nvidia":
@@ -108,7 +108,7 @@ __global__ void {kernel_name}(uint8_t *r, bool real) {{
 """
         for i in range(reg_val):
             code += f"\"mov.u32 tr{i}, %clock;\\n\"\n"
-        code += "\t);\n__syncthreads();\n\tasm volatile(\n"
+        code += "\t);\nGDsyncthreads();\n\tasm volatile(\n"
         for i in range(reg_val):
             code += f"\"st.global.u32 [addr+{4*i}], tr{i};\\n\"\n"
         code += "\t);\n}\n"

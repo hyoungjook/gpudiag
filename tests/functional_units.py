@@ -128,10 +128,10 @@ amd_insts_to_test = [
     FUTest(True, "shmem", 100, 1,
         """\
 uint32_t vop1 = 0;
-__shared__ uint32_t shm[2];
+__gdshmem uint32_t shm[2];
 if (result == nullptr) { // ensure shm usage
 #pragma unroll 1
-    for (int i=0; i<2; i++) shm[i] = (uint32_t)clock();
+    for (int i=0; i<2; i++) shm[i] = (uint32_t)GDclock();
 #pragma unroll 1
     for (int i=0; i<2; i++) asm volatile("v_mov_b32 v0, %0\\n"::"r"(shm[i]));
 }
@@ -154,22 +154,22 @@ shm[0] = 0;
 
 def measure_latency_code(repeat, name, inicode, repcode, fincode):
     code = """\
-__global__ void measure_latency_{}(uint64_t *result){{
+__gdkernel void measure_latency_{}(__gdbufarg uint64_t *result){{
     uint64_t sclk, eclk;
 """.format(name)
     code += inicode
     code += """\
 #pragma unroll 1
     for (int i=0; i<2; i++) { // icache warmup
-        __syncthreads();
-        sclk = clock();
+        GDsyncthreads();
+        sclk = GDclock();
 """
     for i in range(repeat):
         code += repcode(i)
     code += fincode
     code += """\
-        __syncthreads();
-        eclk = clock();
+        GDsyncthreads();
+        eclk = GDclock();
     }
     if (GDThreadIdx == 0) *result = eclk - sclk;
 }
@@ -178,7 +178,7 @@ __global__ void measure_latency_{}(uint64_t *result){{
 
 def measure_width_code(repeat, repeat_for, name, inicode, repcode, fincode):
     code = """\
-__global__ void measure_width_{}(uint64_t *result) {{
+__gdkernel void measure_width_{}(__gdbufarg uint64_t *result) {{
     uint64_t sclk, eclk;
 """.format(name, repeat_for)
     code += inicode
@@ -188,8 +188,8 @@ __global__ void measure_width_{}(uint64_t *result) {{
     for (int i=0; i<2; i++) {{
         if (i==1) {{ // icache warmup done
             repeats = {};
-            __syncthreads();
-            sclk = clock();
+            GDsyncthreads();
+            sclk = GDclock();
         }}
 #pragma unroll 1
         for (int j=0; j<repeats; j++) {{
@@ -199,8 +199,8 @@ __global__ void measure_width_{}(uint64_t *result) {{
     code += fincode
     code += """\
         }}
-        __syncthreads();
-        eclk = clock();
+        GDsyncthreads();
+        eclk = GDclock();
     }}
     if (GDThreadIdx == 0) *result = eclk - sclk;
 }}

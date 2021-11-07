@@ -131,10 +131,15 @@ cudaMemcpy(destp, srcp, size, cudaMemcpyDeviceToHost)
 {printf("  Launched " #kern ": (G,B)=(%d, %d)\n",(int)gDim.x,(int)bDim.x);\
 fflush(stdout); kern<<<gDim, bDim, dynshm>>>(__VA_ARGS__);}
 
+#ifdef KERNEL_FILE
 #define GDThreadIdx (threadIdx.x)
 #define GDBlockIdx (blockIdx.x)
-
-#ifdef KERNEL_FILE
+#define __gdkernel __global__
+#define __gdbufarg
+#define __gdshmem __shared__
+#define GDsyncthreads() __syncthreads()
+#define GDatomicAdd(p, val) atomicAdd(p, val)
+#define GDclock() clock()
 #include KERNEL_FILE
 #endif
 
@@ -168,17 +173,118 @@ hipMemcpy(destp, srcp, size, hipMemcpyDeviceToHost)
 {printf("  Launched " #kern ": (G,B)=(%d, %d)\n",(int)gDim.x,(int)bDim.x);\
 fflush(stdout); hipLaunchKernelGGL(kern, gDim, bDim, dynshm, stream, __VA_ARGS__);}
 
+#ifdef KERNEL_FILE
 #define GDThreadIdx (hipThreadIdx_x)
 #define GDBlockIdx (hipBlockIdx_x)
-
-#ifdef KERNEL_FILE
+#define __gdkernel __global__
+#define __gdbufarg
+#define __gdshmem __shared__
+#define GDsyncthreads() __syncthreads()
+#define GDatomicAdd(p, val) atomicAdd(p, val)
+#define GDclock() clock()
 #include KERNEL_FILE
 #endif
 
 #else                       // TRY OPENCL
+#if defined(__APPLE__)
+#include <OpenCL/opencl.h>
+#else
 #include <CL/cl.h>
-
 #endif
+
+#ifndef MINIMUM_FOR_COMPILE_TESTS
+
+#define GDchk(err, func) \
+if (err != CL_SUCCESS) {printf(#func ": error %d\n", err); exit(1);}
+
+static cl_int GDlasterr;
+static cl_device_id GDdevid;
+static cl_context GDctx;
+static cl_command_queue GDcmdq;
+static cl_program GDprog;
+
+#include <sstream>
+
+void GDInit() {
+    cl_platform_id pf;
+    GDchk(clGetPlatformIDs(1, &pf, NULL), clGetPlatformIDs);
+    GDchk(clGetDeviceIDs(pf, CL_DEVICE_TYPE_GPU, 1, &GDdevid, NULL), clGetDeviceIDs);
+    GDctx = clCreateContext(NULL, 1, &GDdevid, NULL, NULL, &GDlasterr); GDchk(GDlasterr, clCreateContext);
+    GDcmdq = clCreateCommandQueue(GDctx, GDdevid, 0, &GDlasterr); GDchk(GDlasterr, clCreateCommandQueue);
+#ifdef KERNEL_FILE
+    std::ifstream srcf(KERNEL_FILE);
+    if(!srcf.is_open()) {printf("ifstream: failed to open\n"); exit(1);};
+    std::stringstream srcbuf;
+#if MANUFACTURER == 1
+    srcbuf << "inline uint32_t GDclock() {\n"
+        "uint32_t val;\n"
+        "asm volatile(\"mov.u32 %0, %%clock;\\n\":\"=r\"(val));\n"
+        "return val;\n"
+    "}\n";
+#else
+    srcbuf << "inline uint64_t GDclock() {\n"
+        "uint64_t val;\n"
+        "asm volatile(\"s_memtime %0\\n\":\"=l\"(val));\n"
+        "return val;\n"
+    "}\n";
+#endif
+    srcbuf << srcf.rdbuf(); srcf.close();
+    size_t srcl = srcbuf.str().length();
+    char *srcp = (char *)malloc(srcl+1);
+    strncpy(srcp, srcbuf.str().c_str(), srcl+1);
+    GDprog = clCreateProgramWithSource(GDctx, 1, (const char**)&srcp, &srcl, &GDlasterr); GDchk(GDlasterr, clCreateProgramWithSource);
+    const char *buildoptions =
+    "-DGDThreadIdx=get_local_id(0) -DGDBlockIdx=get_group_id(0) "
+    "-D__gdkernel=__kernel -D__gdbufarg=__global -D__gdshmem=__local "
+    "-DGDsyncthreads()=barrier(CLK_LOCAL_MEM_FENCE|CLK_GLOBAL_MEM_FENCE) "
+    "-DGDatomicAdd(p,val)=atomic_add(p,val) "
+    "-Dint8_t=char -Duint8_t=unsigned\\ char -Dint32_t=int -Duint32_t=unsigned\\ int "
+    "-Dint64_t=long\\ long -Duint64_t=unsigned\\ long\\ long "
+    "-cl-opt-disable";
+    GDlasterr = clBuildProgram(GDprog, 1, &GDdevid, buildoptions, NULL, NULL);
+    if (GDlasterr != CL_SUCCESS) {
+        size_t logl; clGetProgramBuildInfo(GDprog, GDdevid, CL_PROGRAM_BUILD_LOG, 0, NULL, &logl);
+        char *logp = (char*)malloc(logl+1); clGetProgramBuildInfo(GDprog, GDdevid, CL_PROGRAM_BUILD_LOG, logl, logp, NULL);
+        fprintf(stderr, "Build failed:\n%s\n", logp); free(logp); GDchk(GDlasterr, clBuildProgram);
+    }
+    free(srcp);
+#endif
+}
+
+struct dim3 {
+    unsigned long x;
+    dim3(): x(1) {}
+    dim3(unsigned long xx): x(xx) {}
+};
+
+template <typename T>
+void GDMalloc(T **p, size_t size) {
+    *p = (T *)clCreateBuffer(GDctx, CL_MEM_READ_WRITE, size, NULL, &GDlasterr);
+}
+
+#define GDFree(p) clReleaseMemObject((cl_mem)(p));
+
+#define GDSynchronize() /*the subsequent GDMemcpyDToH will synchronize the kernel.*/
+
+#define GDMemcpyHToD(destp, srcp, size) \
+GDlasterr = clEnqueueWriteBuffer(GDcmdq, (cl_mem)(destp), CL_TRUE, 0, (size), (srcp), 0, NULL, NULL);
+
+#define GDMemcpyDToH(destp, srcp, size) \
+GDlasterr = clEnqueueReadBuffer(GDcmdq, (cl_mem)(srcp), CL_TRUE, 0, (size), (destp), 0, NULL, NULL);
+
+#define GDIsLastErrorSuccess() (GDlasterr == CL_SUCCESS)
+
+#define GDLaunchKernel(kern, gDim, bDim, dynshm, stream, ...) {\
+cl_kernel kn;\
+kn = clCreateKernel(GDprog, #kern, &GDlasterr); GDchk(GDlasterr, clCreateKernel);\
+size_t lws[1] = {(size_t)bDim.x}; size_t gws[1] = {(size_t)(bDim.x * gDim.x)};\
+GDsetKernelArg(kn, 0, __VA_ARGS__);\
+GDlasterr = clEnqueueNDRangeKernel(GDcmdq, kn, 1, NULL, gws, lws, 0, NULL, NULL);\
+}
+
+#endif // MINIMUM_FOR_COMPILE_TESTS
+
+#endif // OpenCL
 
 // ========== Environment-specific kernel_limit properties ==========
 #ifndef MINIMUM_FOR_COMPILE_TESTS
@@ -216,6 +322,37 @@ void write_deviceprops() {
 #endif
 }
 #else // opencl
-
+#define GDcldevinfo(infotype, valtype, ptr) \
+GDchk(clGetDeviceInfo(GDdevid, infotype, sizeof(valtype), ptr, NULL), clGetDeviceInfo)
+void write_deviceprops() {
+    // Retrievable data
+    size_t LTpB; cl_ulong LSpB;
+    GDcldevinfo(CL_DEVICE_MAX_WORK_GROUP_SIZE, size_t, &LTpB);
+    GDcldevinfo(CL_DEVICE_LOCAL_MEM_SIZE, cl_ulong, &LSpB);
+    // Manually specify others
+    size_t warpSize, LTpG, LRpB_expected;
+#if MANUFACTURER == 1
+    warpSize = 32; LTpG = 1073742824; // 2^30
+    LRpB_expected = 65536;
+#else
+    warpSize = 64; LTpG = 2147483647; // 2^31-1
+    LRpB_expected = 65536;
+#endif
+    // write
+    write_init("prop_values");
+    write_value("0", warpSize);
+    write_value("1", LTpB);
+    write_value("2", LTpG);
+    write_value("3", LSpB);
+#if MANUFACTURER == 1
+    write_value("4", 255);
+    write_value("5", LRpB_expected / warpSize);
+#else
+    uint32_t buf[2] = {102, 256};
+    write_values("4", buf, 2);
+    buf[0] = buf[1] = LRpB_expected / warpSize;
+    write_values("5", buf, 2);
+#endif
+}
 #endif // end opencl
 #endif // end MINIMUM_FOR_COMPILE_TESTS

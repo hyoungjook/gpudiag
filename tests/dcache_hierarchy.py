@@ -6,23 +6,23 @@ from env.config_template import config_values
 
 def dcache_linesize_code(num_repeat):
     return f"""\
-__global__ void measure_l1d_linesize(uint32_t *arr, uint64_t *result) {{
+__gdkernel void measure_l1d_linesize(__gdbufarg uint32_t *arr, __gdbufarg uint64_t *result) {{
     // arr should be ready of sizeof(uint32_t) * num_repeat
     // first value should be ignored; icache can affect the first value
     uint64_t sclk, eclk;
     uint32_t value, dummy = 0;
     uint32_t *ptr = arr;
-    __shared__ uint64_t result_buf[{num_repeat}];
+    __gdshmem uint64_t result_buf[{num_repeat}];
 #pragma unroll 1
     for (int i=0; i<{num_repeat}; i++) {{
         ptr = arr + i;
         value += (uint32_t)((uint64_t)ptr);
-        __syncthreads();
-        sclk = clock();
+        GDsyncthreads();
+        sclk = GDclock();
         value = *ptr;
         dummy += value;
-        __syncthreads();
-        eclk = clock();
+        GDsyncthreads();
+        eclk = GDclock();
         result_buf[i] = eclk - sclk;
     }}
     // first value is useless anyway
@@ -35,13 +35,13 @@ __global__ void measure_l1d_linesize(uint32_t *arr, uint64_t *result) {{
 
 def dcache_hierarchy_code(max_lines):
     return f"""\
-__global__ void measure_dcache(uint32_t *arr, int wordperline, uint64_t *result) {{
+__gdkernel void measure_dcache(__gdbufarg uint32_t *arr, int wordperline, __gdbufarg uint64_t *result) {{
     // arr should be ready of sizeof(uint32_t) * wordperline * max_lines
     // first value should be ignored; icache can affect the first value
     uint64_t sclk, eclk;
     uint32_t value, dummy = 0;
     uint32_t *ptr = arr;
-    __shared__ uint64_t result_buf[{max_lines}];
+    __gdshmem uint64_t result_buf[{max_lines}];
     for (int i={max_lines}-1; i>=0; i--) {{ // warmup
         int test_idx = i * wordperline;
         value = arr[test_idx];
@@ -51,12 +51,12 @@ __global__ void measure_dcache(uint32_t *arr, int wordperline, uint64_t *result)
     for (int i=0; i<{max_lines}; i++) {{
         ptr = arr + (i * wordperline);
         value += (uint32_t)((uint64_t)ptr);
-        __syncthreads();
-        sclk = clock();
+        GDsyncthreads();
+        sclk = GDclock();
         value = *ptr;
         dummy += value;
-        __syncthreads();
-        eclk = clock();
+        GDsyncthreads();
+        eclk = GDclock();
         result_buf[i] = eclk - sclk;
     }}
     // first value is useless anyway

@@ -5,8 +5,8 @@ sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
 def measure_num_mp_code(repeat, repeat_for, inicode, repcode, fincode):
     code = """\
-__global__ void measure_num_mp(uint32_t *sync, uint32_t G, uint64_t *result,
-        uint64_t timeout, uint32_t *is_timeout, uint64_t *totalclk){
+__gdkernel void measure_num_mp(__gdbufarg uint32_t *sync, uint32_t G, __gdbufarg uint64_t *result,
+        uint64_t timeout, __gdbufarg uint32_t *is_timeout, __gdbufarg uint64_t *totalclk){
     // assumes *sync=0, *is_timeout=0 initially
     // if timeout=0, no timeout.
     uint64_t sclk, eclk, toclk;
@@ -18,16 +18,16 @@ __global__ void measure_num_mp(uint32_t *sync, uint32_t G, uint64_t *result,
     // sync1: determine timeout (with timeout)
     bool chktime = (timeout != 0);
     volatile uint32_t *chksync = sync;
-    __syncthreads();
-    sclk = clock();
+    GDsyncthreads();
+    sclk = GDclock();
     toclk = sclk + timeout;
-    if (thread0) atomicAdd(sync, 1);
+    if (thread0) GDatomicAdd(sync, 1);
     while(*chksync < G) {
-        if (chktime && clock() > toclk) {
+        if (chktime && GDclock() > toclk) {
             *is_timeout = 1; return;
         }
     }
-    eclk = clock();
+    eclk = GDclock();
     if (thread0) totalclk[blkid] = eclk - sclk;
 """
     code += inicode
@@ -35,21 +35,21 @@ __global__ void measure_num_mp(uint32_t *sync, uint32_t G, uint64_t *result,
 #pragma unroll 1
     for (int i=0; i<{repeat_for+1}; i++) {{ // warmup icache + repeat_for
         if (i==1) {{
-            __syncthreads();
+            GDsyncthreads();
             // sync2: real sync before measurement, no timeout
-            if (thread0) atomicAdd(sync, 1);
+            if (thread0) GDatomicAdd(sync, 1);
             while(*chksync < G2);
             // begin measurement
-            __syncthreads();
-            sclk = clock();
+            GDsyncthreads();
+            sclk = GDclock();
         }}\n"""
     for i in range(repeat):
         code += repcode(i)
     code += fincode
     code += """\
     }
-    __syncthreads();
-    eclk = clock();
+    GDsyncthreads();
+    eclk = GDclock();
     // save the result
     if (thread0) result[blkid] = eclk - sclk;
 }\n"""

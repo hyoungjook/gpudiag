@@ -7,16 +7,16 @@ from env import script_runner
 
 def icache_code(repeats):
     return  f"""\
-__global__ void measure_icache_{repeats}(uint64_t *result) {{
+__gdkernel void measure_icache_{repeats}(__gdbufarg uint64_t *result) {{
     uint64_t sclk, eclk;
 #pragma unroll 1
     for (int i=0; i<2; i++){{
-        sclk = clock();
+        sclk = GDclock();
 #pragma unroll {repeats}
         for (int j=0; j<{repeats}; j++) {{
-            __syncthreads();
+            GDsyncthreads();
         }}
-        eclk = clock();
+        eclk = GDclock();
     }}
     *result = eclk - sclk;
 }}\n"""

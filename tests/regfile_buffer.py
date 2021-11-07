@@ -6,22 +6,22 @@ from env import script_runner
 
 def measure_regfile_code(kernel_name, reg_val, manufacturer, reg_type):
     code = f"""\
-__global__ void {kernel_name}(uint32_t *sync, uint32_t G,
-        uint64_t timeout, uint32_t *is_timeout, uint64_t *totalclk) {{
+__gdkernel void {kernel_name}(__gdbufarg uint32_t *sync, uint32_t G,
+        uint64_t timeout, __gdbufarg uint32_t *is_timeout, __gdbufarg uint64_t *totalclk) {{
     uint64_t sclk, eclk, toclk;
     bool thread0 = (GDThreadIdx == 0);
     bool chktime = (timeout != 0);
     volatile uint32_t *chksync = sync;
-    __syncthreads();
-    sclk = clock();
+    GDsyncthreads();
+    sclk = GDclock();
     toclk = sclk + timeout;
-    if (thread0) atomicAdd(sync, 1);
+    if (thread0) GDatomicAdd(sync, 1);
     while(*chksync < G) {{
-        if (chktime && clock() > toclk) {{
+        if (chktime && GDclock() > toclk) {{
             *is_timeout = 1; return;
         }}
     }}
-    eclk = clock();
+    eclk = GDclock();
     if (thread0) totalclk[GDBlockIdx] = eclk - sclk;
     // ensure reg usage
     if (G > 0) return; // do not execute, just compile
@@ -35,7 +35,7 @@ __global__ void {kernel_name}(uint32_t *sync, uint32_t G,
 """
         for i in range(reg_val):
             code += f"\"mov.u32 tr{i}, %clock;\\n\"\n"
-        code += "\t);\n__syncthreads();\n\tasm volatile(\n"
+        code += "\t);\nGDsyncthreads();\n\tasm volatile(\n"
         for i in range(reg_val):
             code += f"\"st.global.u32 [addr+{4*i}], tr{i};\\n\"\n"
         code += "\t);\n}\n"
