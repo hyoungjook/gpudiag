@@ -8,7 +8,7 @@ Also, a supported GPU runtime should be installed.
 GPUDiag supports CUDA, ROCm HIP and OpenCL(partially supported, not recommended).
 In addition, python3 and matplotlib is required.
 ~~~shell
-sudo apt install -y python3
+sudo apt install -y python3 python3-pip
 python3 -m pip install --upgrade pip
 pip3 install matplotlib
 ~~~

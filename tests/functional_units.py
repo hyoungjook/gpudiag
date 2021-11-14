@@ -32,38 +32,38 @@ class FUTest:
 nvidia_insts_to_test = [
     FUTest(True, "br", 100, 5,
         "",
-        lambda i: "asm volatile(\"MT_BR_{}: bra MT_BR_{};\\n\");\n".format(i, i+1),
-        lambda n: "asm volatile(\"MT_BR_{}:\");\n".format(n), 0, 0),
+        lambda i: "\"MT_BR_{}: bra MT_BR_{};\\n\"\n".format(i, i+1),
+        lambda n: "\"MT_BR_{}:\"\n".format(n), 0, 0),
 
     FUTest(True, "br_jump", 100, 5,
         "",
-        lambda i: "asm volatile(\"MT_BR_{}: bra MT_BR_{};\\n\" \"bar.sync 0;\\n\");\n".format(i, i+1),
-        lambda n: "asm volatile(\"MT_BR_{}:\");\n".format(n), 0, 0),
+        lambda i: "\"MT_BR_{}: bra MT_BR_{};\\n\" \"bar.sync 0;\\n\"\n".format(i, i+1),
+        lambda n: "\"MT_BR_{}:\"\n".format(n), 0, 0),
 
     FUTest(True, "i32_mov", 100, 5,
         "asm volatile(\".reg .s32 mt_sop1;\\n\");\n" +
         "asm volatile(\"mov.s32 mt_sop1, 0;\\n\");\n",
-        lambda i: "asm volatile(\"mov.s32 mt_sop1, mt_sop1;\\n\");\n",
+        lambda i: "\"mov.s32 mt_sop1, mt_sop1;\\n\"\n",
         lambda n: "", 0, 0),
 
     FUTest(True, "f32_add", 100, 5,
         "asm volatile(\".reg .f32 mt_fop1, mt_fop2;\\n\");\n" +
         "asm volatile(\"mov.f32 mt_fop1, 0f00000000;\\n\");\n" +
         "asm volatile(\"mov.f32 mt_fop2, 0f3F800000;\\n\");\n",
-        lambda i: "asm volatile(\"add.f32 mt_fop1, mt_fop1, mt_fop2;\\n\");\n",
+        lambda i: "\"add.f32 mt_fop1, mt_fop1, mt_fop2;\\n\"\n",
         lambda n: "", 0, 0),
 
     FUTest(True, "i32_add", 100, 5,
         "asm volatile(\".reg .s32 mt_sop1, mt_sop2;\\n\");\n" +
         "asm volatile(\"mov.s32 mt_sop1, 0;\\n\");\n" +
         "asm volatile(\"mov.s32 mt_sop2, 3;\\n\");\n",
-        lambda i: "asm volatile(\"add.s32 mt_sop1, mt_sop1, mt_sop2;\\n\");\n",
+        lambda i: "\"add.s32 mt_sop1, mt_sop1, mt_sop2;\\n\"\n",
         lambda n: "", 0, 0),
 
     FUTest(True, "sfu_sin", 100, 1,
         "asm volatile(\".reg .f32 mt_fop1;\\n\");\n" +
         "asm volatile(\"mov.f32 mt_fop1, 0f3F000000;\\n\");\n",
-        lambda i: "asm volatile(\"sin.approx.ftz.f32 mt_fop1, mt_fop1;\\n\");\n",
+        lambda i: "\"sin.approx.ftz.f32 mt_fop1, mt_fop1;\\n\"\n",
         lambda n: "", 0, 0),
 
     FUTest(True, "shmem", 100, 1,
@@ -71,63 +71,61 @@ nvidia_insts_to_test = [
         "asm volatile(\".reg .u32 mt_var;\\n\");\n" +
         "asm volatile(\"mov.u32 mt_var, mt_shm;\\n\");\n" +
         "asm volatile(\"st.shared.u32 [mt_shm], mt_var;\\n\");\n",
-        lambda i: "asm volatile(\"ld.shared.u32 mt_var, [mt_var];\\n\");\n",
+        lambda i: "\"ld.shared.u32 mt_var, [mt_var];\\n\"\n",
         lambda n: "", 0, 0),
 
     FUTest(True, "gmem", 100, 1,
         "asm volatile(\".reg .u64 mt_addr;\\n\");\n" +
         "asm volatile(\"mov.b64 mt_addr, %0;\\n\"::\"l\"(result));\n" +
         "asm volatile(\"st.global.u64 [mt_addr], mt_addr;\\n\");\n",
-        lambda i: "asm volatile(\"ld.global.u64 mt_addr, [mt_addr];\\n\");\n",
+        lambda i: "\"ld.global.u64 mt_addr, [mt_addr];\\n\"\n",
         lambda n: "", 0, 0),
 ]
 
 amd_insts_to_test = [
-    FUTest(False, "nop", 100, 5,
+    FUTest(True, "nop", 100, 5,
         "",
-        lambda i: "asm volatile(\"s_nop 0\\n\");\n",
+        lambda i: "\"s_nop 0\\n\"\n",
         lambda n: "", 0, 0),
 
-    FUTest(False, "br", 100, 5,
+    FUTest(True, "br", 100, 5,
         "",
-        lambda i: "asm volatile(\"MT_BR_{}: s_branch MT_BR_{}\\n\");\n".format(i, i+1),
-        lambda n: "asm volatile(\"MT_BR_{}:\");\n".format(n),
-        lambda i: "asm volatile(\"MTW_BR_{}: s_branch MTW_BR_{}\\n\");\n".format(i, i+1),
-        lambda n: "asm volatile(\"MTW_BR_{}:\");\n".format(n)),
+        lambda i: "\"MT_BR_{}: s_branch MT_BR_{}\\n\"\n".format(i, i+1),
+        lambda n: "\"MT_BR_{}:\"\n".format(n),
+        lambda i: "\"MTW_BR_{}: s_branch MTW_BR_{}\\n\"\n".format(i, i+1),
+        lambda n: "\"MTW_BR_{}:\"\n".format(n)),
 
-    FUTest(False, "br_jump", 100, 5,
+    FUTest(True, "br_jump", 100, 5,
         "",
-        lambda i: "asm volatile(\"MT_BRJ_{}: s_branch MT_BRJ_{}\\n\" \"s_nop 0\\n\");\n".format(i, i+1),
-        lambda n: "asm volatile(\"MT_BRJ_{}:\");\n".format(n),
-        lambda i: "asm volatile(\"MTW_BRJ_{}: s_branch MTW_BRJ_{}\\n\" \"s_nop 0\\n\");\n".format(i, i+1),
-        lambda n: "asm volatile(\"MTW_BRJ_{}:\");\n".format(n)),
+        lambda i: "\"MT_BRJ_{}: s_branch MT_BRJ_{}\\n\" \"s_nop 0\\n\"\n".format(i, i+1),
+        lambda n: "\"MT_BRJ_{}:\"\n".format(n),
+        lambda i: "\"MTW_BRJ_{}: s_branch MTW_BRJ_{}\\n\" \"s_nop 0\\n\"\n".format(i, i+1),
+        lambda n: "\"MTW_BRJ_{}:\"\n".format(n)),
 
     FUTest(True, "s_mov", 100, 5,
         "int32_t sop1 = 0;\n",
-        lambda i: "asm volatile(\n" if i==0 else "  \"s_mov_b32 %0, %0\\n\"\n",
-        lambda n: "  :\"+s\"(sop1));\n", 0, 0),
-        ## all amdgpu instructions that can modify SCC can be grouped into one asm directive.
+        lambda i: "\"s_mov_b32 %0, %0\\n\"\n",
+        lambda n: ":\"+s\"(sop1)\n", 0, 0),
+        ## all amdgpu instructions that can modify SCC should be grouped into one asm directive.
         ## if not, the kernel can go infinite loop.
 
     FUTest(True, "s_add", 100, 5,
         "int32_t sop1 = 0, sop2 = 3;\n",
-        lambda i: "asm volatile(\n" if i==0 else "  \"s_add_i32 %0, %0, %1\\n\"\n",
-        lambda n: "  :\"+s\"(sop1):\"s\"(sop2));\n", 0, 0),
-        ## all amdgpu instructions that can modify SCC can be grouped into one asm directive.
-        ## if not, the kernel can go infinite loop.
+        lambda i: "\"s_add_i32 %0, %0, %1\\n\"\n",
+        lambda n: ":\"+s\"(sop1):\"s\"(sop2)\n", 0, 0),
 
-    FUTest(False, "v_mov", 100, 5,
+    FUTest(True, "v_mov", 100, 5,
         "int32_t vop1 = 0;\n",
-        lambda i: "asm volatile(\"v_mov_b32 %0, %0\\n\":\"+v\"(vop1));\n",
-        lambda n: "", 0, 0),
+        lambda i: "\"v_mov_b32 %0, %0\\n\"\n",
+        lambda n: ":\"+v\"(vop1)", 0, 0),
 
-    FUTest(False, "v_add", 100, 5,
+    FUTest(True, "v_add", 100, 5,
         "uint32_t vop1 = 0, sop1 = 3;\n",
-        lambda i: "asm volatile(\"v_add_u32 %0, vcc, %0, %1\\n\":\"+v\"(vop1):\"s\"(sop1));\n", # for gfx800 series
-        # lambda i: "asm volatile(\"v_add_nc_u32 %0, %1, %0\\n\":\"+v\"(vop1):\"s\"(sop1));\n", # for gfx1000 series
-        lambda n: "", 0, 0),
+        #lambda i: "\"v_add_u32 %0, vcc, %0, %1\\n\"\n", # for gfx800 series
+        lambda i: "\"v_add_nc_u32 %0, %1, %0\\n\"\n", # for gfx1000 series
+        lambda n: ":\"+v\"(vop1):\"s\"(sop1)", 0, 0),
 
-    FUTest(False, "shmem", 100, 1,
+    FUTest(True, "shmem", 100, 1,
         """\
 uint32_t vop1 = 0;
 __gdshmem uint32_t shm[2];
@@ -139,16 +137,16 @@ if (result == nullptr) { // ensure shm usage
 }
 shm[0] = 0;
 """,
-        lambda i: "asm volatile(\"ds_read_b32 %0, %0\\n\":\"+v\"(vop1));\n" +
-                "asm volatile(\"s_waitcnt lgkmcnt(0)\\n\");\n",
-        lambda n: "", 0, 0),
+        lambda i: "\"ds_read_b32 %0, %0\\n\"\n" +
+                "\"s_waitcnt lgkmcnt(0)\\n\"\n",
+        lambda n: ":\"+v\"(vop1)", 0, 0),
     
-    FUTest(False, "gmem", 100, 1,
+    FUTest(True, "gmem", 100, 1,
         "uint64_t vop1 = (uint64_t)result;\n" +
         "*result = vop1;\n",
-        lambda i: "asm volatile(\"flat_load_dwordx2 %0, %0\\n\":\"+v\"(vop1));\n" +
-                "asm volatile(\"s_waitcnt lgkmcnt(0)\\n\");\n",
-        lambda n: "", 0, 0),
+        lambda i: "\"flat_load_dwordx2 %0, %0\\n\"\n" +
+                "\"s_waitcnt lgkmcnt(0)\\n\"\n",
+        lambda n: ":\"+v\"(vop1)", 0, 0),
 
 ]
 
@@ -165,11 +163,13 @@ __gdkernel void measure_latency_{}(__gdbufarg uint64_t *result){{
     for (int i=0; i<2; i++) { // icache warmup
         GDsyncthreads();
         sclk = GDclock();
+        asm volatile(
 """
     for i in range(repeat):
         code += repcode(i)
     code += fincode
     code += """\
+        );
         GDsyncthreads();
         eclk = GDclock();
     }
@@ -195,11 +195,13 @@ __gdkernel void measure_width_{}(__gdbufarg uint64_t *result) {{
         }}
 #pragma unroll 1
         for (int j=0; j<repeats; j++) {{
+            asm volatile(
 """.format(repeat_for)
     for i in range(repeat):
         code += repcode(i)
     code += fincode
     code += """\
+            );
         }}
         GDsyncthreads();
         eclk = GDclock();
