@@ -83,19 +83,19 @@ nvidia_insts_to_test = [
 ]
 
 amd_insts_to_test = [
-    FUTest(True, "nop", 100, 5,
+    FUTest(False, "nop", 100, 5,
         "",
         lambda i: "asm volatile(\"s_nop 0\\n\");\n",
         lambda n: "", 0, 0),
 
-    FUTest(True, "br", 100, 5,
+    FUTest(False, "br", 100, 5,
         "",
         lambda i: "asm volatile(\"MT_BR_{}: s_branch MT_BR_{}\\n\");\n".format(i, i+1),
         lambda n: "asm volatile(\"MT_BR_{}:\");\n".format(n),
         lambda i: "asm volatile(\"MTW_BR_{}: s_branch MTW_BR_{}\\n\");\n".format(i, i+1),
         lambda n: "asm volatile(\"MTW_BR_{}:\");\n".format(n)),
 
-    FUTest(True, "br_jump", 100, 5,
+    FUTest(False, "br_jump", 100, 5,
         "",
         lambda i: "asm volatile(\"MT_BRJ_{}: s_branch MT_BRJ_{}\\n\" \"s_nop 0\\n\");\n".format(i, i+1),
         lambda n: "asm volatile(\"MT_BRJ_{}:\");\n".format(n),
@@ -104,28 +104,29 @@ amd_insts_to_test = [
 
     FUTest(True, "s_mov", 100, 5,
         "int32_t sop1 = 0;\n",
-        lambda i: "asm volatile(\"s_mov_b32 %0, %0\\n\":\"+s\"(sop1));\n",
-        lambda n: "", 0, 0),
+        lambda i: "asm volatile(\n" if i==0 else "  \"s_mov_b32 %0, %0\\n\"\n",
+        lambda n: "  :\"+s\"(sop1));\n", 0, 0),
+        ## all amdgpu instructions that can modify SCC can be grouped into one asm directive.
+        ## if not, the kernel can go infinite loop.
 
     FUTest(True, "s_add", 100, 5,
         "int32_t sop1 = 0, sop2 = 3;\n",
-        lambda i: "asm volatile(\"s_add_i32 %0, %0, %1\\n\":\"+s\"(sop1):\"s\"(sop2));\n",
-        lambda n: "asm volatile(\"s_mov_b32 %0, %0\\n\":\"+s\"(sop1));\n", 0, 0),
-        ## s_mov was added as fincode to s_add test, because
-        ## the compiler inserts s_cmp at the second last position to compensate the
-        ## delay, but the last s_add inst contaminates scc, which makes inf loop.
+        lambda i: "asm volatile(\n" if i==0 else "  \"s_add_i32 %0, %0, %1\\n\"\n",
+        lambda n: "  :\"+s\"(sop1):\"s\"(sop2));\n", 0, 0),
+        ## all amdgpu instructions that can modify SCC can be grouped into one asm directive.
+        ## if not, the kernel can go infinite loop.
 
-    FUTest(True, "v_mov", 100, 5,
+    FUTest(False, "v_mov", 100, 5,
         "int32_t vop1 = 0;\n",
         lambda i: "asm volatile(\"v_mov_b32 %0, %0\\n\":\"+v\"(vop1));\n",
         lambda n: "", 0, 0),
 
-    FUTest(True, "v_add", 100, 5,
+    FUTest(False, "v_add", 100, 5,
         "uint32_t vop1 = 0, sop1 = 3;\n",
         lambda i: "asm volatile(\"v_add_u32 %0, vcc, %0, %1\\n\":\"+v\"(vop1):\"s\"(sop1));\n",
         lambda n: "", 0, 0),
 
-    FUTest(True, "shmem", 100, 1,
+    FUTest(False, "shmem", 100, 1,
         """\
 uint32_t vop1 = 0;
 __gdshmem uint32_t shm[2];
@@ -141,7 +142,7 @@ shm[0] = 0;
                 "asm volatile(\"s_waitcnt lgkmcnt(0)\\n\");\n",
         lambda n: "", 0, 0),
     
-    FUTest(True, "gmem", 100, 1,
+    FUTest(False, "gmem", 100, 1,
         "uint64_t vop1 = (uint64_t)result;\n" +
         "*result = vop1;\n",
         lambda i: "asm volatile(\"flat_load_dwordx2 %0, %0\\n\":\"+v\"(vop1));\n" +

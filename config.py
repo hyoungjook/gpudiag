@@ -4,15 +4,15 @@ from env.config_template import config_values as confval
 
 ##### ========================================= #####
 ##### Select the config preset you want to use! #####
-select_config_preset = "g4ad"
+select_config_preset = "gem5"
 
 ##### ========================================= #####
 #####         Select which test to run!         #####
 select_tests_to_run = {
     Test.kernel_limits      : False,
-    Test.icache_hierarchy   : True,
+    Test.icache_hierarchy   : False,
     Test.dcache_hierarchy   : False,
-    Test.functional_units   : False,
+    Test.functional_units   : True,
     Test.num_mp             : False,
     Test.warpstate_buffer   : False,
     Test.sharedmem_buffer   : False,

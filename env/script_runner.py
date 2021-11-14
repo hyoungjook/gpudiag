@@ -12,7 +12,7 @@ def cat(path):
     return print_and_exec("cat " + path)
 
 def rm(path):
-    return print_and_exec("rm -r " + path)
+    return print_and_exec("rm -rf " + path)
 
 def cp(src, dest):
     return print_and_exec(f"cp {src} {dest}")
