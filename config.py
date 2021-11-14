@@ -4,7 +4,7 @@ from env.config_template import config_values as confval
 
 ##### ========================================= #####
 ##### Select the config preset you want to use! #####
-select_config_preset = "gem5"
+select_config_preset = "g4dn"
 
 ##### ========================================= #####
 #####         Select which test to run!         #####
@@ -12,7 +12,7 @@ select_tests_to_run = {
     Test.kernel_limits      : False,
     Test.icache_hierarchy   : False,
     Test.dcache_hierarchy   : False,
-    Test.functional_units   : True,
+    Test.functional_units   : False,
     Test.num_mp             : False,
     Test.warpstate_buffer   : False,
     Test.sharedmem_buffer   : False,
@@ -77,6 +77,27 @@ define_config_presets = [
             "$SRC -o $BIN",
         conf.run_cmd: "$DIR/$BIN",
         conf.objdump_cmd: "", # not supported!
+        conf.use_values: {
+            confval.shared_memory_test_granularity: 128,
+            confval.register_test_granularity: 16,
+            confval.max_icache_investigate_KiB: 64,
+            confval.icache_investigate_interval_B: 2048,
+            confval.max_dcache_investigate_repeats: 16384,
+            confval.fu_latency_repeats: 32,
+            confval.nslot_timeout_multiplier: 10,
+        }
+    },
+
+    # AWS g4dn config
+    {   conf.name: "g4dn",
+        conf.manufacturer: "nvidia",
+        conf.is_simulator: False,
+        conf.simulator_path: "",
+        conf.compile_cmd: "nvcc -x cu " +\
+            "-gencode arch=compute_75,code=compute_75 " +\
+            "-gencode arch=compute_75,code=sm_75 $SRC -o $BIN -Xptxas=-O0",
+        conf.run_cmd: "$DIR/$BIN",
+        conf.objdump_cmd: "cuobjdump -ptx $BIN > $OUT", # not supported!
         conf.use_values: {
             confval.shared_memory_test_granularity: 128,
             confval.register_test_granularity: 16,

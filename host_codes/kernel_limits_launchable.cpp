@@ -138,7 +138,7 @@ int main(int argc, char **argv) {
     do_shm_chk(deliver_compilableLSpB, deliver_LSpB_test_unit);
 #if MANUFACTURER == 1
     do_reg_chk(deliver_compilableLRpT0, deliver_Reg_test_unit,
-        deliver_propLRpB, deliver_regmin);
+        deliver_propLRpB0, deliver_regmin);
 #else
     do_reg_chk(deliver_compilableLRpT0, deliver_compilableLRpT1,
         deliver_Reg_test_unit, deliver_propLRpB0, deliver_propLRpB1, deliver_regmin);
