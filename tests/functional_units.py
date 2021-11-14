@@ -123,7 +123,8 @@ amd_insts_to_test = [
 
     FUTest(False, "v_add", 100, 5,
         "uint32_t vop1 = 0, sop1 = 3;\n",
-        lambda i: "asm volatile(\"v_add_u32 %0, vcc, %0, %1\\n\":\"+v\"(vop1):\"s\"(sop1));\n",
+        lambda i: "asm volatile(\"v_add_u32 %0, vcc, %0, %1\\n\":\"+v\"(vop1):\"s\"(sop1));\n", # for gfx800 series
+        # lambda i: "asm volatile(\"v_add_nc_u32 %0, %1, %0\\n\":\"+v\"(vop1):\"s\"(sop1));\n", # for gfx1000 series
         lambda n: "", 0, 0),
 
     FUTest(False, "shmem", 100, 1,
