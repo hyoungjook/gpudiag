@@ -44,10 +44,12 @@ int main(int argc, char **argv) {
         int num_warps_earlier = 0;
         // real_warpid i's first scheduled time
         uint64_t first_time = hres[i * Nrepeat];
-        // count earlier
+        // count the number of 'more early-started' warp ids
         for (int j=0; j<max_b; j++) {
             if (j==i) continue;
-            if (hres[j*Nrepeat] < first_time) num_warps_earlier++;
+            if (hres[j*Nrepeat] < first_time ||
+                hres[j*Nrepeat] == first_time && j < i) // tiebreaker by id
+                    num_warps_earlier++;
         }
         // save to sorted
         sorted_warp[i] = num_warps_earlier;

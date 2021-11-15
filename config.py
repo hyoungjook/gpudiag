@@ -18,6 +18,7 @@ select_tests_to_run = {
     Test.sharedmem_buffer   : False,
     Test.regfile_buffer     : False,
     Test.warpsched_policy   : False,
+    Test.nslot_verify       : True,
 }
 
 ## You can define the config preset that matches your env. ##

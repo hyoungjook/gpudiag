@@ -10,6 +10,7 @@ class Test(Enum):
     sharedmem_buffer = auto()
     regfile_buffer = auto()
     warpsched_policy = auto()
+    nslot_verify = auto()
 
 class Feature(Enum):
     warp_size = auto()
