@@ -141,6 +141,12 @@ cudaMemcpy(destp, srcp, size, cudaMemcpyDeviceToHost)
 
 #define GDIsLastErrorSuccess() (cudaGetLastError() == cudaSuccess)
 
+#define GDEvent_t cudaEvent_t
+#define GDEventCreate(evtp) cudaEventCreate(evtp)
+#define GDEventRecord(evt) cudaEventRecord(evt)
+#define GDEventSynchronize(evt) cudaEventSynchronize(evt)
+#define GDEventElapsedTime(fp, e1, e2) cudaEventElapsedTime(fp, e1, e2)
+
 #endif
 
 #define GDLaunchKernel(kern, gDim, bDim, dynshm, stream, ...) \
@@ -182,6 +188,12 @@ hipMemcpy(destp, srcp, size, hipMemcpyHostToDevice)
 hipMemcpy(destp, srcp, size, hipMemcpyDeviceToHost)
 
 #define GDIsLastErrorSuccess() (hipGetLastError() == hipSuccess)
+
+#define GDEvent_t hipEvent_t
+#define GDEventCreate(evtp) hipEventCreate(evtp)
+#define GDEventRecord(evt) hipEventRecord(evt, 0)
+#define GDEventSynchronize(evt) hipEventSynchronize(evt)
+#define GDEventElapsedTime(fp, e1, e2) hipEventElapsedTime(fp, e1, e2)
 
 #endif
 

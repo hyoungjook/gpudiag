@@ -8,39 +8,23 @@ import sys, os
 nvidia_inst_to_test = "shmem"
 amd_inst_to_test = "shmem"
 ### How many for repetitions?
-for_repetitions = 1000
+for_repetitions = 10000
 
 ### ========== End of Options ==========
 
 def measure_width_multiple_G_code(repeat, repeat_for, inicode, repcode, fincode):
     code = f"""\
-__gdkernel void measure_width_verify(__gdbufarg uint64_t *result) {{
-    uint64_t sclk, eclk;
+__gdkernel void measure_width_verify() {{
     {inicode}
-    int repeats = 1;
 #pragma unroll 1
-    for (int i=0; i<2; i++) {{
-        if (i==1) {{ // icache warmup done
-            repeats = {repeat_for};
-            GDsyncthreads();
-            sclk = GDclock();
-        }}
-#pragma unroll 1
-        for (int j=0; j<repeats; j++) {{
-            asm volatile(
+    for (int j=0; j<{repeat_for}; j++) {{
+        asm volatile(
 """
     for i in range(repeat):
         code += repcode(i)
     code += fincode
     code += f"""\
-            );
-        }}
-        GDsyncthreads();
-        eclk = GDclock();
-    }}
-    if (GDThreadIdx == 0) {{
-        result[2*GDBlockIdx] = sclk;
-        result[2*GDBlockIdx+1] = eclk;
+        );
     }}
 }}
 """
